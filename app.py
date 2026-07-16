@@ -194,6 +194,90 @@ def parse_nmap_hosts_xml(xml_text: str) -> list:
     return hosts
 
 
+# ── Router detection ────────────────────────────────────────────────────────
+# Finding the LAN's router is not as simple as reading our own default gateway:
+# on Docker's default bridge network that's the bridge (172.x.0.1 — i.e. the
+# Docker host), not the router. So instead we traceroute outward and take the
+# last private hop before the path leaves private address space. On bridge
+# networking that skips past the bridge to the real gateway; on host networking
+# the router is simply the first hop and the same rule still picks it.
+#
+# Any always-on public address works as the trace target — we only ever send
+# probe packets, and stop after a few hops since the router is always near the
+# start of the path.
+ROUTER_TRACE_TARGET = "1.1.1.1"
+ROUTER_TRACE_MAX_HOPS = 5
+_TRACE_HOP_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
+_IPV4_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+
+def _own_default_gateway():
+    """This container's own default gateway, read from /proc/net/route. Used
+    only to warn when it's also what the trace picked — see detect_gateway."""
+    try:
+        with open("/proc/net/route") as fh:
+            for line in fh.readlines()[1:]:
+                fields = line.split()
+                # Destination 00000000 = 0.0.0.0, i.e. the default route. The
+                # gateway column is a little-endian hex u32.
+                if len(fields) > 2 and fields[1] == "00000000":
+                    raw = int.from_bytes(bytes.fromhex(fields[2]), "little")
+                    return str(ipaddress.IPv4Address(raw))
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _trace_hops(output: str) -> list:
+    """Parse `traceroute -n` output into a list of hop addresses, using None for
+    a hop that didn't answer."""
+    hops = []
+    for line in output.splitlines()[1:]:        # first line is the header
+        m = _TRACE_HOP_RE.match(line)
+        if not m:
+            continue
+        found = _IPV4_RE.search(m.group(2))
+        hops.append(found.group(1) if found else None)
+    return hops
+
+
+def detect_gateway():
+    """Locate the router this host sits behind. Returns (info, error)."""
+    if not shutil.which("traceroute"):
+        return None, "traceroute is not installed in this container."
+    argv = ["traceroute", "-n", "-w", "2", "-q", "1",
+            "-m", str(ROUTER_TRACE_MAX_HOPS), ROUTER_TRACE_TARGET]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=40)
+    except subprocess.TimeoutExpired:
+        return None, "Timed out while tracing a route out of this network."
+
+    hops = _trace_hops(proc.stdout)
+    if not hops:
+        return None, "Could not trace a route out of this network."
+
+    inside = []
+    for ip in hops:
+        if ip is None:
+            continue          # a silent hop tells us nothing; keep walking
+        if not ipaddress.ip_address(ip).is_private:
+            break             # left private space — the router is behind us
+        inside.append(ip)
+    if not inside:
+        return None, ("No private hop on the way out, so there's no router in "
+                      "front of this host to scan.")
+
+    # The full hop list and our own gateway ride along so the UI can show where
+    # the answer came from. Deliberately no "that looks like the Docker bridge"
+    # warning: a single private hop equal to our own gateway is both the bridge
+    # on a router-less Docker host *and* the router itself on host networking,
+    # and the trace can't tell those apart — so it would cry wolf on a correct
+    # result. The hop number shows the provenance instead.
+    gateway = inside[-1]
+    return {"ip": gateway, "hop": hops.index(gateway) + 1, "hops": hops,
+            "ownGateway": _own_default_gateway(), "command": " ".join(argv)}, None
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  URL Analyzer — ported from the url-analyzer tool
 # ════════════════════════════════════════════════════════════════════════════
@@ -1645,6 +1729,16 @@ def scan():
                     "command": " ".join(args), "stderr": proc.stderr.strip()})
 
 
+@app.route("/api/router")
+def router_detect():
+    """Locate the router in front of this host. The Network Scan form calls this
+    to fill in the target, so the scan itself stays the ordinary /api/scan path."""
+    info, err = detect_gateway()
+    if err:
+        return jsonify({"error": err}), 502
+    return jsonify({**info, "dns": resolve(info["ip"])})
+
+
 def run_subnet_sweep(cidr: str):
     """Sweep a subnet for live hosts. Returns (payload, error_payload, status) —
     exactly one of payload / error_payload is set. Shared by the live scan
@@ -2046,6 +2140,86 @@ def console_run():
     )
     if err:
         return jsonify({"error": err}), 400
+    return jsonify(payload)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  Public IP — the address this container leaves the network from
+# ════════════════════════════════════════════════════════════════════════════
+# Nothing inside the LAN knows the WAN address: the router rewrites the source
+# address on the way out, so only an outside observer can report it back. Hence
+# the fixed list of echo services below — tried in order, first valid answer
+# wins, so one being down or rate-limiting doesn't break the lookup.
+#
+# The result is the egress address of the router this container sits behind,
+# which for a home LAN is "your" public IP.
+# Ordered richest-first: ifconfig.co also reports the ASN/owner and a rough
+# location, which is worth having. It rate-limits free use, so the two bare-IP
+# services back it up — a fallback answer loses the extra context but still
+# gives the address, which is the point of the lookup.
+PUBLIC_IP_SOURCES = (
+    ("ifconfig.co", "https://ifconfig.co/json"),
+    ("ipify",       "https://api.ipify.org?format=json"),
+    ("icanhazip",   "https://icanhazip.com"),
+)
+
+
+def _fetch_public_ip(url: str, timeout: int = 6):
+    """Query one echo service -> (ip_text, extra_fields). Raises on failure.
+
+    The services disagree on format: some return bare text, some a JSON object.
+    Only the handful of context fields worth showing are carried over."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read(8192).decode("utf-8", "replace").strip()
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return body, {}                      # bare-text service (icanhazip)
+    if not isinstance(data, dict):
+        raise ValueError("unexpected response shape")
+    extra = {}
+    for src, dst in (("asn", "asn"), ("asn_org", "org"),
+                     ("country", "country"), ("city", "city")):
+        if data.get(src):
+            extra[dst] = str(data[src])[:80]
+    return (data.get("ip") or "").strip(), extra
+
+
+def get_public_ip() -> dict:
+    """Ask each echo service in turn until one returns a valid public address."""
+    failed = []
+    for name, url in PUBLIC_IP_SOURCES:
+        try:
+            ip, extra = _fetch_public_ip(url)
+            # Parsing the address is also the validation: an HTML error page or a
+            # rate-limit blurb will never survive ip_address().
+            addr = ipaddress.ip_address(ip)
+        except Exception as e:
+            app.logger.info("public-ip source %s failed: %s", name, e)
+            failed.append(name)
+            continue
+        if not addr.is_global:
+            # A private/loopback answer means we're behind a proxy that echoed an
+            # internal address — it isn't the public IP, so try the next source.
+            app.logger.info("public-ip source %s returned non-global %s", name, addr)
+            failed.append(name)
+            continue
+        try:
+            rdns = socket.gethostbyaddr(str(addr))[0]
+        except OSError:
+            rdns = None
+        return {"ip": str(addr), "version": addr.version, "source": name,
+                "reverseDns": rdns, "failedSources": failed,
+                "timestamp": datetime.now(timezone.utc).isoformat(), **extra}
+    return {"error": "No public-IP source could be reached. Check outbound connectivity."}
+
+
+@app.route("/api/public-ip")
+def public_ip():
+    payload = get_public_ip()
+    if payload.get("error"):
+        return jsonify(payload), 502
     return jsonify(payload)
 
 

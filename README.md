@@ -3,82 +3,14 @@
 > ⚠️ **Disclaimer:** This is a Claude Code "vibe coding" project. It was built
 > iteratively with the [Claude Code](https://claude.com/claude-code) AI agent
 > and is intended for personal/experimental use. Review the code before relying
-> on it, and handle your GitHub token with care.
+> on it.
 
-A tiny self-hosted web UI with four tools in a left-hand menu:
-
-1. **Network Scan** — point it at an IP or hostname and it runs
-   [`nmap`](https://nmap.org/) to map open ports, running services/versions,
-   and guess the OS, plus resolve the DNS name ⇄ IP.
-2. **URL Analyzer** — point it at a website and it inspects security headers,
-   the TLS certificate, DNS records, the redirect chain, cookies, and
-   `security.txt`/`robots.txt`.
-3. **Exposure Probe** — point it at a test/staging URL and it checks for
-   sensitive files commonly left open (`.git/`, `.env`, debug endpoints,
-   Swagger docs), each confirmed by a content signature.
-4. **Repo Audit** — point it at a git repo and it runs a suite of scanners:
-   [`gitleaks`](https://github.com/gitleaks/gitleaks) (secrets),
-   [`trivy`](https://github.com/aquasecurity/trivy) (dependency CVEs, IaC
-   misconfiguration, license risks, SBOM),
-   [`hadolint`](https://github.com/hadolint/hadolint) (Dockerfiles), and
-   [`zizmor`](https://github.com/woodruffw/zizmor) (GitHub Actions workflows).
-   Audits a remote URL or a repo you've cloned locally.
-
-Dark, blue-tinted, single page. Runs in Docker.
+A self-hosted security toolbox: point it at a host, a URL, a subnet, a domain,
+or a git repo and it tells you what's exposed. Dark, blue-tinted, single page,
+runs in Docker. No accounts, no build step, no cloud.
 
 > ⚠️ **Only scan hosts you own or are explicitly authorised to test.**
 > Port scanning other people's machines may be illegal where you live.
-
-## Features
-
-### Network Scan
-- **DNS resolution** — forward and reverse lookup, so you see the name ⇄ IP mapping.
-- **Port scan** — Fast (~100 ports), Standard (top 1000), or Full (all 65,535).
-- **Service & version detection** (`-sV`) — what's running on each open port.
-- **OS detection** (`-O`) — best-effort guess from the TCP/IP fingerprint.
-- **Default scripts** (`-sC`) — banners, certs, common misconfigurations.
-- **Skip host discovery** (`-Pn`) — scan hosts that don't answer pings.
-
-### URL Analyzer
-- **Basic info** — resolved IP, HTTP status, disclosed server.
-- **Security headers** — CSP, HSTS, X-Frame-Options, and more (present/missing).
-- **TLS certificate** — subject, issuer, validity, SANs, cipher, fingerprint,
-  self-signed detection.
-- **DNS records** — A, AAAA, PTR, NS, MX, TXT, CAA.
-- **Redirect chain**, **cookie flags** (Secure/HttpOnly/SameSite), and
-  `security.txt`/`robots.txt` discovery.
-- Optional **port scan** of the first 1024 ports (reuses nmap).
-- **HTTP Basic auth** — optional username/password for URLs behind a Basic-auth
-  prompt; sent as an `Authorization` header on every HTTP(S) probe.
-
-### Exposure Probe
-- **Sensitive paths** — `.git/HEAD`, `.git/config`, `.env`, `.svn/entries`,
-  Apache `server-status`, Spring `actuator/env`, `swagger.json`, `.DS_Store`.
-- **Signature-gated** — a path only counts as exposed if the response body
-  matches a known signature, so a soft-404 site doesn't flag every check.
-- **Misconfigurations** — active checks for clickjacking (missing
-  X-Frame-Options / CSP frame-ancestors), CORS arbitrary-origin reflection,
-  weak cookie flags, and framework debug mode (Flask/Django stack traces).
-- **HTTP Basic auth** — optional credentials for staging behind a Basic-auth prompt.
-
-### Repo Audit
-- **Secrets** (`gitleaks`) — committed credentials/keys; the full secret is
-  redacted to a short preview in the results.
-- **Vulnerable dependencies** (`trivy fs`) — known CVEs in your dependency
-  manifests, with installed/fixed versions and severity.
-- **IaC misconfiguration** (`trivy`) — insecure settings in Terraform,
-  Kubernetes manifests, and Dockerfiles.
-- **License risks** (`trivy`) — risky/copyleft licenses in dependencies
-  (populates for ecosystems that expose license metadata).
-- **SBOM** (`trivy`) — a downloadable CycloneDX software bill of materials.
-- **Dockerfile lint** (`hadolint`) — root user, unpinned base images, and other
-  Dockerfile smells.
-- **GitHub Actions audit** (`zizmor`, offline) — `pull_request_target` abuse,
-  unpinned third-party actions, token over-scoping, and more.
-- **Remote or local** — audit a public `github.com`/`gitlab.com` URL (shallow
-  clone), or pick a repo you've cloned yourself into the mounted audit folder.
-  The local mode is for **private / organisation repos**: clone them with your
-  own credentials, then audit them here — no GitHub token ever enters this app.
 
 ## Run it
 
@@ -88,41 +20,148 @@ docker compose up --build
 
 Then open <http://localhost:8090>.
 
-## How it works
+## What's in it
 
-A single Flask app (`app.py`) serves all four tools from one page (client-side
-menu switching). **Network Scan** builds and runs an `nmap` command and parses its XML
-output. **URL Analyzer** probes the target over HTTP(S) and TLS using Python's
-stdlib plus `dnspython` (for MX/NS/TXT/CAA records) and `cryptography` (to read
-certificate details, including self-signed certs). nmap is installed inside the
-container and is also reused for the URL Analyzer's optional port scan.
+Seven tools in the left-hand menu — plus Saved Reports below them, and a few
+things in the top bar.
 
-The container is granted `NET_RAW` and `NET_ADMIN` capabilities (see
-`docker-compose.yml`) so nmap can send raw packets — this is what SYN scans and
-OS detection need. Without them, nmap still works but falls back to slower
-TCP-connect scans and can't fingerprint the OS.
+| Tool | What it does |
+|------|--------------|
+| **Network Scan** | `nmap` against one host: open ports, service/version, OS guess, DNS name ⇄ IP |
+| **Subnet Scan** | Sweeps a CIDR range for live hosts (IP, hostname, MAC, vendor) |
+| **URL Analyzer** | Security headers, TLS, DNS, mail auth, mixed content, cookies → a graded scorecard |
+| **Exposure Probe** | Sensitive files and misconfigurations left open on a staging host |
+| **Repo Audit** | Secrets, dependency CVEs, IaC misconfig, licences, SBOM, Dockerfiles, GitHub Actions |
+| **Subdomain Finder** | Passive subdomain discovery from CT logs, with liveness checks |
+| **Availability Dashboard** | Persistent uptime monitors (HTTP/TCP/ICMP/API) checked in the background |
 
-**Repo Audit** clones a remote repo (shallow) into a temp dir, or scans a repo
-you've mounted locally, then runs `gitleaks` (secrets), `trivy` (CVEs, IaC
-misconfiguration, licenses, and a CycloneDX SBOM in one pass), `hadolint` (over
-any Dockerfiles), and `zizmor` (over `.github/workflows`, offline) — all bundled
-in the container. **Exposure Probe** runs its path and misconfiguration checks
-with Python's stdlib only. Trivy downloads its vulnerability database on first
-use, so the first audit per container is slower.
+### Network Scan
+- **DNS resolution** — forward and reverse lookup, so you see the name ⇄ IP mapping.
+- **Port scan** — Fast (~100 ports), Standard (top 1000), or Full (all 65,535).
+- **Service & version detection** (`-sV`), **OS detection** (`-O`), **default
+  scripts** (`-sC`), and **skip host discovery** (`-Pn`) for hosts that don't ping.
+- **Detect my router** — fills in the address of the router you're behind, so you
+  can scan it without knowing it. See [Finding your router](#finding-your-router).
 
-### Auditing private repos with local clones
+### Subnet Scan
+- **Host discovery** (`nmap -sn`) across a CIDR range — ARP on the local segment,
+  ICMP/TCP elsewhere. Capped at 1024 addresses (≈ a /22) so a fat prefix can't
+  turn into a 65k-host sweep.
+- **MAC + vendor** for hosts on the local segment, which is usually enough to
+  recognise a device.
+- **Save the scan** (see [Saved scans](#saved-scans)) to re-sweep later and diff.
+
+### URL Analyzer
+- **Security headers** — CSP, HSTS, X-Frame-Options, and more. CSP and HSTS are
+  *graded*, not just presence-checked: an `unsafe-inline` script policy or a
+  wildcard source is reported as weak, and HSTS is checked for browser
+  preload-list eligibility.
+- **TLS** — certificate subject/issuer/validity/SANs/fingerprint, self-signed
+  detection, full chain verification, which protocol versions the server still
+  accepts (TLS 1.0–1.3), and weak-cipher detection.
+- **DNS records** — A, AAAA, PTR, NS, MX, TXT, CAA.
+- **Mail authentication** (optional) — DMARC (honouring organizational-domain
+  inheritance), SPF (with the RFC 7208 10-lookup limit), DKIM, MTA-STS, TLS-RPT,
+  and a DNSSEC signing indicator.
+- **Mixed content & third parties** — parses the page HTML for sub-resources
+  loaded over `http://` on an HTTPS page, split into active (blocked by
+  browsers) and passive, plus an inventory of third-party hosts. No requests are
+  made to those hosts.
+- **Redirect chain** — followed up to 10 hops and checked for downgrades and loops.
+- **Cookies** (Secure/HttpOnly/SameSite), **security.txt**, **robots.txt**.
+- **Scorecard** — the findings roll into per-category verdicts and a weighted
+  0–100 score. Categories that don't apply are excluded rather than penalised.
+- Optional **port scan** of ports 1–1024, and **HTTP Basic auth** credentials.
+
+### Exposure Probe
+- **Sensitive paths** — `.git/HEAD`, `.git/config`, `.env`, `.svn/entries`,
+  Apache `server-status`, Spring `actuator/env`, `swagger.json`, `.DS_Store`.
+- **Signature-gated** — a path only counts as exposed if the response body
+  matches a known signature, so a soft-404 site doesn't flag every check.
+- **Misconfigurations** — clickjacking (missing X-Frame-Options / CSP
+  frame-ancestors), CORS arbitrary-origin reflection, weak cookie flags, and
+  framework debug mode (Flask/Django stack traces).
+- **HTTP Basic auth** — optional credentials for staging behind a Basic-auth prompt.
+
+### Repo Audit
+- **Secrets** (`gitleaks`) — committed credentials/keys, redacted to a short
+  preview in the results.
+- **Vulnerable dependencies** (`trivy fs`) — known CVEs with installed/fixed
+  versions, severity, CVSS score/vector, CWEs, and references.
+- **IaC misconfiguration** (`trivy`) — Terraform, Kubernetes, Dockerfiles.
+- **License risks** (`trivy`) — risky/copyleft licences, for ecosystems that
+  expose licence metadata.
+- **SBOM** (`trivy`) — a downloadable CycloneDX bill of materials.
+- **Dockerfile lint** (`hadolint`) and **GitHub Actions audit** (`zizmor`,
+  offline) — `pull_request_target` abuse, unpinned actions, token over-scoping.
+- **Remote or local** — audit a public `github.com`/`gitlab.com` URL (shallow
+  clone), or a repo you've cloned yourself. See
+  [Auditing private repos](#auditing-private-repos-with-local-clones).
+
+### Subdomain Finder
+- **Passive discovery** across [crt.sh](https://crt.sh), CertSpotter, and
+  HackerTarget — keyless CT-log / passive-DNS sources, queried concurrently and
+  merged, so one being down doesn't sink the lookup.
+- **Resolution** — every name found is resolved, so hosts that are actually live
+  are separated from names that only ever appeared in a certificate.
+- **Liveness probe** — per-name DNS + ICMP + HTTP + HTTPS check on demand.
+- Capped at 500 names. Save it to track what appears and disappears over time.
+
+### Availability Dashboard
+- **Monitor types** — HTTP(S), TCP port, ICMP ping, or API (HTTP plus an
+  `Authorization` header).
+- **Expectations** — an expected status code and/or a keyword that must appear
+  in the body.
+- **Background scheduler** — checks run on each monitor's own interval
+  (30s–24h) whether or not the page is open; status transitions are recorded as
+  events, and per-monitor history is kept.
+- **Export / import** monitors as JSON (Settings → Data).
+- Persisted to SQLite on the `./data` volume, so it survives restarts.
+
+## Top bar
+
+- **Public IP** 🌐 — shows the address this app leaves the network from, i.e.
+  the WAN address of the router it sits behind, with reverse DNS and the owning
+  network where available. Nothing inside a LAN knows its own public address
+  (the router rewrites it on the way out), so this is resolved via an external
+  echo service — the one outbound call the app makes on its own behalf.
+- **Console** — a fixed menu of read-only network tools: `ping`, `traceroute`,
+  `dig`, `whois`. Deliberately **not** a shell: you pick a tool and supply one
+  target, and every flag is pinned server-side.
+- **Reset** — clears all results and returns to the default view.
+- **Settings** — theme picker (neon / classic / github / light), monitor
+  export/import.
+
+## Saved reports & saved scans
+
+Two different things, and the difference matters:
+
+- **Report history** (menu → Saved Reports) — freezes a result as a
+  self-contained HTML file on the data volume. Good for "this is what it looked
+  like on the day". Served back with a locked-down CSP so a stored report can
+  never run scripts. Available for every tool.
+- **Saved scans** (Subnet Scan and Subdomain Finder) — stores the tool's own
+  result data, so reopening it re-renders through the normal UI with every
+  button still working. **Refresh** re-runs the tool against the same target and
+  marks what's **new** or **gone** since last time, and you can attach a **note**
+  to any host. Notes are keyed to the scan, so they survive a host dropping out
+  of a refresh and coming back.
+
+## Auditing private repos with local clones
 
 To audit a private / organisation repo without giving this app a GitHub token,
-clone it yourself and point the **Repo Audit → Local clone** mode at it. The host
-folder set by `AUDIT_DIR` (default `./audit`) is mounted **read-only** at `/audit`
-in the container; any repo you drop in there shows up in the Local clone dropdown:
+clone it yourself and point **Repo Audit → Local clone** at it. The host folder
+set by `AUDIT_DIR` (default `./audit`) is mounted **read-only** at `/audit`; any
+repo you drop in there appears in the Local clone dropdown:
 
 ```bash
 git clone git@github.com:my-org/private-app.git ./audit/private-app
 AUDIT_DIR=./audit docker compose up --build      # ./audit is the default
 ```
 
-### Scanning the host machine or its LAN
+Your credentials never enter the app — git does the clone, not SecAnalysis.
+
+## Scanning the host machine or its LAN
 
 With the default bridge network, the container reaches other machines on your
 LAN through the host's routing, which is fine for most scans. To scan the
@@ -130,23 +169,102 @@ LAN through the host's routing, which is fine for most scans. To scan the
 in `docker-compose.yml`, comment out the `ports:` block and uncomment
 `network_mode: host`, then browse to <http://localhost:8080>.
 
+Note that on the default bridge network the container's own default gateway is
+the Docker bridge (`172.x.0.1`), not your router — so "the gateway" as seen from
+inside the container is the Docker host.
+
+## Finding your router
+
+**Network Scan → Detect my router** fills in the address of the router this app
+sits behind. Because of the gateway quirk just above, it can't simply read its
+own default route: on the default bridge network that returns the Docker bridge.
+Instead it traceroutes outward and takes the **last hop still inside private
+address space** — which skips the bridge on bridge networking, and still lands
+on the router when running with host networking. The note next to the button
+shows which hop it picked, so you can see where the answer came from.
+
+Detecting only fills the field; nothing is scanned until you press **Scan**, and
+the scan is an ordinary Network Scan, so every option, report, and save works.
+
+This answers "what does my router expose **to my LAN?**" — typically the admin
+UI and DNS. It is *not* the same question as "what does the **internet** see?".
+Nothing inside the LAN can answer that one: you need a vantage point outside it,
+and scanning your own public IP from the inside hits the NAT from the wrong side
+and gives misleading results. (The **Public IP** button tells you the address an
+outside scanner would need, but the scan itself has to come from outside.)
+
 ## Configuration
 
-| Variable       | Default   | Meaning                                            |
-|----------------|-----------|----------------------------------------------------|
-| `SCAN_TIMEOUT` | `300`     | Max seconds before a scan aborts                   |
-| `AUDIT_DIR`    | `./audit` | Host folder of local clones, mounted at `/audit`   |
-| `AUDIT_ROOT`   | `/audit`  | In-container path Repo Audit reads local clones from |
+| Variable       | Default                  | Meaning                                              |
+|----------------|--------------------------|------------------------------------------------------|
+| `SCAN_TIMEOUT` | `300`                    | Max seconds before a scan aborts                     |
+| `AUDIT_DIR`    | `./audit`                | Host folder of local clones, mounted at `/audit`     |
+| `AUDIT_ROOT`   | `/audit`                 | In-container path Repo Audit reads local clones from |
+| `DATA_DIR`     | `./data`                 | Host folder for the database + saved reports         |
+| `DB_PATH`      | `/data/secanalysis.db`   | SQLite store (monitors, saved scans, report index)   |
+| `HISTORY_DIR`  | `<DB_PATH dir>/history`  | Where saved HTML reports are written                 |
+| `SCHED_TICK`   | `10`                     | Seconds between monitor-scheduler ticks              |
+
+## How it works
+
+A single Flask app (`app.py`) serves every tool from one page, with client-side
+menu switching — no framework, no build step. `templates/index.html` holds the
+markup and all the JS; `static/style.css` holds the themes.
+
+**Network Scan** and **Subnet Scan** build an `nmap` argument list and parse its
+XML. **URL Analyzer** probes over HTTP(S)/TLS using the stdlib plus `dnspython`
+and `cryptography`. **Exposure Probe** uses the stdlib only. **Repo Audit**
+shallow-clones into a temp dir (or reads a mounted clone) and runs `gitleaks`,
+`trivy`, `hadolint`, and `zizmor` — all bundled in the image. Trivy downloads
+its vulnerability database on first use, so the first audit per container is
+slower. The **Availability Dashboard** runs a background scheduler thread and
+persists to SQLite.
+
+The container gets `NET_RAW` / `NET_ADMIN` (see `docker-compose.yml`) so nmap
+can send raw packets — what SYN scans and OS detection need. Without them nmap
+still works but falls back to slower TCP-connect scans and can't fingerprint
+the OS.
+
+### Security notes
+
+The app has no authentication and is meant to run on a host you control — it can
+scan your network, so don't expose it to one you don't trust. Beyond that:
+
+- Every external command is invoked with an **argument list, never a shell
+  string**, so no input is ever parsed by a shell.
+- Scan targets are validated to a single IP/hostname with no leading dash, so a
+  target can't be smuggled in as an nmap flag.
+- The Console's tool list and flags live **server-side**; the browser only sends
+  a tool id and a target.
+- Local clone names and saved-report filenames are resolved against their root
+  with **path traversal blocked**.
+- State-changing requests are **origin-checked** (CSRF), request bodies are
+  capped, and gitleaks findings are **redacted** to a 4-character preview.
+
+See `SECURITY.md` for how to report an issue.
+
+## Tests
+
+```bash
+docker cp test_app.py netscan:/app/ \
+  && docker exec netscan python -m pytest test_app.py -q
+```
+
+Smoke tests for routing, the pure helpers (grading, parsing, validation), the
+history/saved-scan CRUD, and the security guards. Hermetic — they point the DB
+at a temp dir and never touch the network or the real data volume.
 
 ## Notes & limits
 
-- This is an MVP: scans run synchronously, so the browser waits while nmap
-  works. Full (`-p-`) scans on a slow host can hit the timeout — bump
-  `SCAN_TIMEOUT` or use a smaller range.
-- The target input is validated to a single IP/hostname and nmap is always
-  invoked with an argument list (never a shell string), so the form can't be
-  used for command injection.
+- Scans run synchronously, so the browser waits while nmap works. Full (`-p-`)
+  scans on a slow host can hit the timeout — bump `SCAN_TIMEOUT` or use a
+  smaller range.
+- Passive subdomain sources are third-party and rate-limited; results vary with
+  what the CT logs have seen.
+- The DKIM check probes a list of common selectors, so "no common selectors"
+  is not proof DKIM is unused.
 
 ## Stack
 
-Flask · nmap · gitleaks · trivy · hadolint · zizmor · vanilla JS/CSS · Docker. No database, no build step.
+Flask · SQLite · nmap · gitleaks · trivy · hadolint · zizmor · dnspython ·
+cryptography · vanilla JS/CSS · Docker.
