@@ -1,0 +1,3 @@
+# Drop locally-cloned repos here to audit them via Repo Audit → "Local clone".
+# This folder is mounted read-only into the container at /audit.
+# Override the host location with AUDIT_DIR (see docker-compose.yml).

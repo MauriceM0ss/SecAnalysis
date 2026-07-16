@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+
+# Local clones dropped in for Repo Audit — keep the folder, ignore its contents
+/audit/*
+!/audit/.gitkeep
+
+# Availability Dashboard SQLite store (created at runtime in the mounted volume)
+/data/

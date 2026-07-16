@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="7" fill="#070d18"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="6" fill="none" stroke="#213a63" stroke-width="1"/>
+  <!-- shield: straight top, sides curving to a point -->
+  <path d="M6 6.5
+           L26 6.5
+           L26 14.5
+           C26 20.5, 21.5 25.2, 16 28
+           C10.5 25.2, 6 20.5, 6 14.5
+           Z"
+        fill="#3b82f6" stroke="#1d4ed8" stroke-width="0.8"/>
+  <!-- top highlight band -->
+  <path d="M7.4 7.9 L24.6 7.9 L24.6 12
+           C21 10.2, 18.4 9.7, 16 9.7
+           C13.6 9.7, 11 10.2, 7.4 12 Z"
+        fill="#93c5fd" opacity="0.4"/>
+  <!-- check mark -->
+  <path d="M11.4 16 L14.7 19.2 L20.7 12.4"
+        fill="none" stroke="#eaf2ff" stroke-width="2.3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

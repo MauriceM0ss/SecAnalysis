@@ -1,0 +1,896 @@
+/* ── Reset & base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+
+/* ── Dark scrollbars ───────────────────────────────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--bg-base); }
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ── Theming ──────────────────────────────────────────────────────────────
+   The UI is driven by these tokens. A theme is picked via the `data-theme`
+   attribute on <html> (set early in index.html to avoid a flash, switchable
+   from the sidebar). `--on-accent` is the text colour on an accent-filled
+   surface; `--accent-rgb` feeds the ambient glows; `--glow-logo` collapses to
+   `none` in the calm themes. */
+
+:root { --header-h: 56px; }   /* layout — theme-independent */
+
+/* ── Neon — dark terminal (default). ── */
+:root, [data-theme="neon"] {
+  --bg-base:      #07090b;
+  --bg-surface:   #0e1114;
+  --bg-elevated:  #161b20;
+  --bg-input:     #0b0f12;
+  --border:       rgba(120, 140, 150, .14);
+  --border-soft:  rgba(120, 140, 150, .09);
+  --text:         #e6edf2;
+  --text-muted:   #7d8a93;
+  --accent:       #39ff14;          /* neon green — primary / active */
+  --accent-strong:#5dff3a;
+  --accent2:      #19f0ff;          /* cyan — passive section labels */
+  --accent-dim:   rgba(57, 255, 20, .15);
+  --accent-rgb:   57, 255, 20;
+  --danger:       #ff5563;
+  --warn:         #f5c451;          /* amber — "needs attention" verdicts */
+  --on-accent:    #07090b;
+  --glow-logo:    0 0 18px rgba(57, 255, 20, .45);
+  --sel-bg:       rgba(57, 255, 20, .28);
+  --sel-fg:       #fff;
+  --radius:       6px;
+  --header-bg:    #000000;          /* the bar is black in every theme */
+  --header-fg:    #19f0ff;          /* title + icons, on that black */
+  --header-logo:  #5dff3a;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-head:    "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ── Classic — the original deep-blue theme. ── */
+[data-theme="classic"] {
+  --bg-base:      #070d18;
+  --bg-surface:   #0c1424;
+  --bg-elevated:  #15233f;
+  --bg-input:     #0a1322;
+  --border:       #213a63;
+  --border-soft:  #1a2e50;
+  --text:         #d6e4f7;
+  --text-muted:   #8198bd;
+  --accent:       #3b82f6;
+  --accent-strong:#60a5fa;
+  --accent2:      #8198bd;          /* labels plain muted */
+  --accent-dim:   rgba(59, 130, 246, .15);
+  --accent-rgb:   59, 130, 246;
+  --danger:       #ff7b7b;
+  --warn:         #f0b429;
+  --on-accent:    #04101f;
+  --glow-logo:    0 0 18px rgba(59, 130, 246, .35);
+  --sel-bg:       rgba(59, 130, 246, .3);
+  --sel-fg:       #fff;
+  --header-bg:    #000000;
+  --header-fg:    #8198bd;
+  --header-logo:  #60a5fa;
+  --radius:       10px;
+  --font-mono:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-head:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── Light. ── */
+[data-theme="light"] {
+  --bg-base:      #eef1f6;
+  --bg-surface:   #ffffff;
+  --bg-elevated:  #e9edf4;
+  --bg-input:     #ffffff;
+  --border:       #d5dce8;
+  --border-soft:  #e2e7f0;
+  --text:         #1b2331;
+  --text-muted:   #5c6781;
+  --accent:       #2563eb;
+  --accent-strong:#1d4ed8;
+  --accent2:      #5c6781;
+  --accent-dim:   rgba(37, 99, 235, .12);
+  --accent-rgb:   37, 99, 235;
+  --danger:       #dc2626;
+  --warn:         #b45309;
+  --on-accent:    #fff;
+  --glow-logo:    none;
+  --sel-bg:       rgba(37, 99, 235, .22);
+  --sel-fg:       #0b1220;
+  --header-bg:    #000000;
+  --header-fg:    #98a2b3;          /* the theme's own muted is too dark on black */
+  --header-logo:  #60a5fa;          /* likewise its accent-strong */
+  --radius:       10px;
+  --font-mono:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-head:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── GitHub — Primer dark. ──
+   Colours are GitHub's own dark palette: canvas #0d1117 / subtle #161b22 /
+   inset #010409, borders #30363d, blue #2f81f7 for links, focus and anything
+   active. GitHub splits what this app calls "accent" in two — blue for links,
+   green for the primary action — so it's the one theme that sets the optional
+   --btn-* tokens (see .btn-primary) to keep the Scan button GitHub green. */
+[data-theme="github"] {
+  --bg-base:      #0d1117;
+  --bg-surface:   #161b22;
+  --bg-elevated:  #21262d;
+  --bg-input:     #010409;
+  --border:       #30363d;
+  --border-soft:  #21262d;
+  --text:         #e6edf3;
+  --text-muted:   #8b949e;
+  --accent:       #2f81f7;
+  --accent-strong:#58a6ff;
+  --accent2:      #8b949e;          /* labels plain muted */
+  --accent-dim:   rgba(47, 129, 247, .15);
+  --accent-rgb:   47, 129, 247;
+  --danger:       #f85149;
+  --warn:         #d29922;
+  --on-accent:    #ffffff;
+  --glow-logo:    none;
+  --sel-bg:       rgba(47, 129, 247, .3);
+  --sel-fg:       #ffffff;
+  --header-bg:    #010409;          /* Primer canvas.inset */
+  --header-fg:    #8b949e;
+  --header-logo:  #58a6ff;
+  --radius:       6px;
+  --btn-bg:       #238636;          /* GitHub's green primary button */
+  --btn-bg-hover: #2ea043;
+  --btn-rgb:      35, 134, 54;
+  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-head:    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
+                  Helvetica, Arial, sans-serif;
+}
+
+body {
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg-base);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  line-height: 1.55;
+}
+::selection { background: var(--sel-bg); color: var(--sel-fg); }
+
+code, .mono { font-family: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace; }
+code {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: .88em;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+.site-header {
+  position: sticky; top: 0; z-index: 20;
+  height: var(--header-h);
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 0 40px rgba(var(--accent-rgb), .08);
+  padding: 0 22px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+.logo { display: flex; align-items: center; gap: 9px; font-family: var(--font-head); font-weight: 700; font-size: 1.05rem;
+  color: var(--header-logo); text-shadow: var(--glow-logo); }
+.logo-icon { width: 26px; height: 26px; }
+.header-title { justify-self: center; font-size: .72rem; font-weight: 600; letter-spacing: .22em;
+  text-transform: uppercase; color: var(--header-fg); }
+
+/* Top-right action cluster (reset + settings). */
+.header-actions { justify-self: end; display: flex; align-items: center; gap: 6px; }
+
+/* Monochrome icon buttons (reset, settings gear, dialog close). */
+.icon-btn { display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; background: none; border: 1px solid transparent; border-radius: 8px;
+  color: var(--text-muted); cursor: pointer; transition: color .15s, background .15s, border-color .15s; }
+.icon-btn:hover { color: var(--text); background: var(--bg-elevated); }
+.icon-btn:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+/* Header icons sit on black whatever the theme, so they can't use the shared
+   hover (light themes would put near-black text on a near-white chip here). */
+.site-header .icon-btn { color: var(--header-fg); }
+.site-header .icon-btn:hover { color: #fff; background: rgba(255, 255, 255, .1); }
+
+/* Compact monochrome action buttons used inline inside result tables. */
+.row-actions { display: inline-flex; gap: 2px; margin-left: 8px; vertical-align: middle; }
+.row-btn { display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; background: none; border: 1px solid transparent;
+  border-radius: 6px; color: var(--text-muted); cursor: pointer; text-decoration: none;
+  transition: color .15s, background .15s, border-color .15s; vertical-align: middle; }
+.row-btn:hover { color: var(--text); background: var(--bg-elevated); }
+.row-btn:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.row-btn.copied { color: var(--flag-ok, #3fb950); }
+.ip-entry { display: inline-flex; align-items: center; gap: 4px; }
+.ip-entry + .ip-entry { margin-top: 3px; }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+/* Fixed menu, main takes the rest. The menu width is set here and nowhere else. */
+.layout { display: grid; grid-template-columns: 220px 1fr; flex: 1; min-height: 0; }
+
+/* ── Left menu ───────────────────────────────────────────────────────────── */
+.sidebar {
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+/* The menu still scrolls (wheel/trackpad) once enough saved scans pile up, but
+   its scrollbar sits hard against the divider and reads as permanent chrome
+   rather than a hint. Opt this one element out of the global scrollbar styling.
+   Collapsing a tool's saved list is the real answer to a too-long menu. */
+.sidebar { scrollbar-width: none; }
+.sidebar::-webkit-scrollbar { width: 0; height: 0; }
+.sidebar-section {
+  font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .22em;
+  color: var(--accent2); padding: 4px 10px 8px;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 11px;
+  width: 100%; text-align: left;
+  background: transparent; border: 1px solid transparent; border-radius: 9px;
+  padding: 11px 12px; cursor: pointer; color: var(--text);
+  transition: background .15s, border-color .15s;
+}
+.menu-item:hover { background: var(--bg-elevated); }
+.menu-item.active { background: var(--bg-elevated); border-color: var(--accent); }
+.menu-text { display: flex; flex-direction: column; }
+.menu-text strong { font-size: .92rem; font-weight: 600; }
+.menu-item.active .menu-text strong { color: var(--accent-strong); }
+.menu-text em { font-style: normal; font-size: .76rem; color: var(--text-muted); }
+
+/* Version status bar, pinned to the bottom-left of the sidebar. */
+.sidebar-status { margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid var(--border-soft);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sidebar-status .app-name { font-family: var(--font-head); font-weight: 600; font-size: .78rem;
+  color: var(--text-muted); }
+.sidebar-status .app-version { font-family: var(--font-mono); font-size: .75rem; font-weight: 600;
+  color: var(--accent); }
+
+/* ── Settings dialog ─────────────────────────────────────────────────────── */
+.theme-picker {
+  width: 100%; background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 11px; font-family: inherit; font-size: .88rem; cursor: pointer;
+}
+.theme-picker:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+.settings-dialog {
+  /* Fixed footprint so switching tabs never resizes the dialog. `margin: auto`
+     centres the modal — the global `* { margin: 0 }` reset would otherwise pin
+     it to the top-left. */
+  margin: auto;
+  width: 460px; max-width: calc(100vw - 32px);
+  height: 380px; max-height: calc(100vh - 64px);
+  padding: 0; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--bg-surface); color: var(--text);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 40px rgba(var(--accent-rgb), .08);
+  flex-direction: column;
+}
+.settings-dialog[open] { display: flex; }
+.settings-dialog::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(2px); }
+
+.dlg-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 16px 12px 20px; border-bottom: 1px solid var(--border-soft); }
+.dlg-head h2 { font-family: var(--font-head); font-size: 1.05rem; font-weight: 600; color: var(--text); }
+.dlg-x { width: 30px; height: 30px; }
+
+.dlg-tabs { display: flex; gap: 4px; padding: 10px 16px 0; border-bottom: 1px solid var(--border-soft); }
+.dlg-tab { background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); font-family: inherit; font-size: .85rem; font-weight: 600;
+  padding: 8px 12px; margin-bottom: -1px; cursor: pointer; transition: color .15s, border-color .15s; }
+.dlg-tab:hover { color: var(--text); }
+.dlg-tab.active { color: var(--accent-strong); border-bottom-color: var(--accent); }
+.dlg-tab:focus-visible { outline: none; color: var(--text); }
+
+.dlg-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
+.dlg-panel { display: none; flex-direction: column; gap: 4px; }
+.dlg-panel.active { display: flex; }
+.dlg-panel .hint { margin: 10px 0 0; }
+
+.dlg-foot { display: flex; justify-content: flex-end; gap: 10px;
+  padding: 12px 20px 16px; border-top: 1px solid var(--border-soft); }
+
+/* ── Finding detail dialog (Repo Audit CVE / IaC) ───────────────────────────
+   Like the settings dialog but grows with its content up to the viewport. */
+.finding-dialog {
+  margin: auto;
+  width: 660px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  padding: 0; border: 1px solid var(--border); border-radius: 14px;
+  background: var(--bg-surface); color: var(--text);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 40px rgba(var(--accent-rgb), .08);
+  flex-direction: column;
+}
+.finding-dialog[open] { display: flex; }
+.finding-dialog::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(2px); }
+.finding-dialog .dlg-head h2 { font-family: var(--font-mono); overflow-wrap: anywhere; }
+
+.live-dialog { width: 480px; }
+.live-loading { display: flex; align-items: center; gap: 9px; color: var(--text-muted);
+  font-size: .88rem; padding: 6px 0; }
+.live-row { display: grid; grid-template-columns: 92px 20px 1fr; align-items: start; gap: 10px;
+  padding: 10px 0; border-bottom: 1px solid var(--border-soft); }
+.live-row:last-child { border-bottom: none; }
+.live-label { color: var(--text-muted); font-size: .74rem; text-transform: uppercase;
+  letter-spacing: .06em; padding-top: 2px; }
+.live-state { text-align: center; }
+.live-detail { font-family: var(--font-mono); font-size: .84rem; overflow-wrap: anywhere; line-height: 1.5; }
+.live-detail .muted { display: inline-block; margin-top: 2px; }
+
+/* ── Saved subnet scans ─────────────────────────────────────────────────────
+   Sidebar entries nested under the Subnet Scan tool. The rule collapses to
+   nothing when no scans are saved, so the menu is unchanged until you save one. */
+/* The tool button and its collapse chevron share a row; the button keeps all the
+   spare width so it looks identical to the tools that have no submenu. */
+.menu-row { display: flex; align-items: center; gap: 2px; }
+.menu-row .menu-item { flex: 1; min-width: 0; }
+.submenu-toggle { display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; width: 28px; height: 28px; padding: 0; background: none;
+  border: 1px solid transparent; border-radius: 7px; color: var(--text-muted);
+  cursor: pointer; transition: color .15s, background .15s, transform .15s; }
+.submenu-toggle:hover { color: var(--text); background: var(--bg-elevated); }
+.submenu-toggle:focus-visible { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim); }
+.submenu-toggle.collapsed { transform: rotate(-90deg); }
+
+.submenu:empty, .submenu.collapsed { display: none; }
+.submenu { display: flex; flex-direction: column; margin: -2px 0 4px; }
+.submenu-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 7px 14px 7px 26px; background: none; border: none; border-left: 2px solid var(--border-soft);
+  margin-left: 14px; color: var(--text-muted); cursor: pointer; font: inherit;
+  transition: color .15s, background .15s, border-color .15s; }
+.submenu-item:hover { color: var(--text); background: var(--bg-elevated); }
+.submenu-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
+.submenu-item:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent-dim); }
+.submenu-item .menu-text strong { font-size: .82rem; font-weight: 600; }
+.submenu-item .menu-text em { font-size: .68rem; }
+
+/* Header bar above a saved scan's table: identity + the scan-level actions. */
+.saved-bar { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; }
+.saved-bar-head { display: flex; flex-direction: column; gap: 4px; }
+.saved-bar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.saved-diff { font-size: .74rem; color: var(--warn); font-family: var(--font-mono); }
+
+/* Row state in a refreshed scan: appeared since / no longer answering. */
+.host-badge { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 20px;
+  font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  border: 1px solid currentColor; vertical-align: middle; }
+.host-badge.new { color: var(--accent); }
+.host-badge.gone { color: var(--text-muted); }
+.row-gone td { opacity: .55; }
+/* Notes are kept to a single line so a long one can't stretch the row; the full
+   text is on the cell's tooltip and in the note dialog. Generated reports
+   override this (see buildReportDoc) so an exported note is never cut off. */
+.note-cell { font-size: .82rem; max-width: 280px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.row-btn.has-note { color: var(--accent); }
+
+.note-dialog { width: 560px; }
+.note-text { width: 100%; resize: vertical; font-family: var(--font-mono); font-size: .84rem;
+  line-height: 1.5; padding: 10px 12px; }
+.savescan-dialog { width: 460px; }
+.savescan-dialog .mon-input { width: 100%; }
+
+/* The monitor dialog wraps its body + footer in the <form>, so the form has to
+   be the flex column the dialog would otherwise be — otherwise the body can't
+   scroll and the footer won't stay put. */
+.monitor-dialog { width: 620px; }
+.monitor-dialog form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.monitor-dialog .dlg-body > .mon-grid:first-child { margin-top: 0; }
+.monitor-dialog #monitor-error { margin-top: 14px; }
+
+/* ── Console dialog ─────────────────────────────────────────────────────────
+   A fixed menu of network tools, not a shell. Sized wider than the other
+   dialogs because traceroute / whois output is naturally wide. */
+.console-dialog { width: 760px; }
+/* stretch, not center: the primary button has no vertical padding of its own
+   and relies on the row to size it — centering left Run half-height. */
+.console-bar { display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap; }
+.console-bar .btn-primary { min-width: 96px; }
+/* .mon-input is width:100%, which forced each control onto its own line. Let the
+   selects size to their content so the bar reads as one row. */
+.console-bar .mon-input { width: auto; }
+.console-bar #console-target { flex: 1 1 220px; font-family: var(--font-mono); }
+.console-bar #console-tool, .console-bar #console-rtype { flex: 0 0 auto; font-family: var(--font-mono); }
+.console-dialog .hint { margin: 8px 0 12px; font-family: var(--font-mono); font-size: .74rem; }
+
+.console-out {
+  height: 340px; overflow: auto; padding: 12px 14px;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+  font-family: var(--font-mono); font-size: .8rem; line-height: 1.5; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.console-out:empty::before { content: "> Pick a tool, enter a target, press Run."; color: var(--text-muted); }
+.console-out:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.console-cmd { color: var(--accent); margin-top: 10px; }
+.console-cmd:first-child { margin-top: 0; }
+.console-err { color: var(--danger); }
+.console-meta { color: var(--text-muted); font-size: .72rem; margin-bottom: 2px; }
+.console-note { font-size: .72rem; color: var(--text-muted); margin-right: auto; }
+
+.finding-body-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+.finding-meta { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px;
+  margin: 0 0 4px; font-size: .85rem; }
+.finding-meta dt { color: var(--text-muted); }
+.finding-meta dd { color: var(--text); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.finding-section { margin-top: 16px; }
+.finding-section h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--text-muted); margin-bottom: 6px; }
+.finding-section p { font-size: .88rem; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
+.finding-refs { display: flex; flex-direction: column; gap: 5px; }
+.finding-refs a, .finding-primary a { color: var(--accent-strong); font-size: .82rem; overflow-wrap: anywhere; }
+.finding-refs a:hover, .finding-primary a:hover { color: var(--accent); }
+
+/* Severity pill reused in the dialog head; colours match the filter chips. */
+.sev-pill { display: inline-flex; align-items: center; font-size: .72rem; font-weight: 700;
+  padding: 2px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: .04em;
+  border: 1px solid currentColor; }
+.sev-pill.sev-critical { color: #ff8a8a; }
+.sev-pill.sev-high { color: #ffb36a; }
+.sev-pill.sev-medium { color: #f4d06a; }
+.sev-pill.sev-low { color: #7dd3fc; }
+.sev-pill.sev-informational { color: var(--text-muted); }
+
+/* Link-style button that opens a finding's detail dialog from a table cell. */
+.link-btn { background: none; border: none; padding: 0; font: inherit; color: var(--accent-strong);
+  cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.link-btn:hover { color: var(--accent); }
+.link-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-dim); border-radius: 3px; }
+
+.btn-secondary {
+  align-self: flex-start;
+  background: var(--bg-elevated); color: var(--text); font-weight: 600;
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 9px 18px; font-family: inherit; font-size: .88rem; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.btn-secondary:hover { border-color: var(--accent); }
+.btn-secondary:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+/* ── Main / views ────────────────────────────────────────────────────────── */
+/* Each view is two stacked panes: the form on top, the output below it. The form
+   row is `auto` — exactly as tall as its fields need — and the output takes
+   everything left over, so the form never scrolls and only the output does. The
+   output keeps a floor so a tall form can't squeeze it away; if the window is
+   too short for both, the form pane scrolls rather than clipping.
+   Portrait / narrow screens collapse this into one scrolling column — see the
+   responsive block at the bottom of this file. */
+.main {
+  padding: 26px 22px; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.view { display: none; }
+.view.active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, auto) minmax(140px, 1fr);
+  gap: 14px;
+  flex: 1; min-height: 0;
+  width: 100%; max-width: 1900px; margin: 0 auto;
+}
+/* Full-width views (History) have no form pane at all. */
+.view.view-full.active { grid-template-rows: minmax(0, 1fr); }
+
+.history-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.history-toolbar .field-label { margin: 0; }
+/* History's help button has no card head to sit in, so it takes the spare width
+   and lands right — level with the rest of the toolbar. */
+.history-toolbar .help-btn { margin-left: auto; }
+.history-select { width: auto; min-width: 170px; }
+.history-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-mini { display: inline-flex; align-items: center; align-self: auto;
+  padding: 5px 11px; font-size: .78rem; text-decoration: none; }
+
+/* Panes. Each scrolls on its own — the form never follows the output. At the
+   default `auto` height the input pane has nothing to scroll; it only does so if
+   you drag the divider up past the form's own height. */
+.pane-input, .pane-output {
+  display: flex; flex-direction: column; gap: 18px;
+  overflow-y: auto; min-height: 0;
+}
+.pane-input { padding-right: 2px; }
+
+/* The output pane reads as a recessed "console screen": it sits on the base
+   background while the cards inside it keep the raised surface colour. */
+.pane-output {
+  padding: 18px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: inset 0 0 40px rgba(var(--accent-rgb), .05);
+}
+
+/* Idle state of the output pane, before anything has been run. */
+.pane-empty { margin: auto; text-align: center; color: var(--text-muted); font-size: .85rem; }
+.pane-empty .prompt { color: var(--accent); }
+.pane-empty .cursor { display: inline-block; width: .5em; height: 1em; vertical-align: text-bottom;
+  background: var(--accent); animation: blink 1.1s step-end infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .6), 0 0 40px rgba(var(--accent-rgb), .06);
+  padding: 22px;
+}
+
+/* ── Form ────────────────────────────────────────────────────────────────── */
+.field-label { display: block; font-weight: 600; font-size: .8rem; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--text-muted); margin-bottom: 8px; }
+.input-group { display: flex; gap: 10px; }
+/* Every text field in an .input-group, matched structurally rather than by id:
+   the old id list (#target, #url, …) silently left Subnet Scan's and Subdomains'
+   fields unstyled, and any new tool's field would have been next.
+   `min-width: 0` lets a field shrink below its intrinsic width so the button
+   beside it still fits in a narrow pane. */
+.input-group input[type="text"], .input-group input[type="password"] {
+  flex: 1; min-width: 0; background: var(--bg-input); border: 2px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 11px 14px; font-size: 1rem;
+  font-family: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  transition: border-color .2s, box-shadow .2s;
+}
+.input-group input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.input-group input::placeholder { color: var(--text-muted); }
+
+#repo-local {
+  flex: 1; min-width: 0; background: var(--bg-input); border: 2px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 11px 14px; font-size: 1rem; cursor: pointer;
+  transition: border-color .2s, box-shadow .2s;
+}
+#repo-local:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+
+/* The primary button normally just uses the theme's accent. A theme whose
+   primary action isn't its accent colour (GitHub: blue links, green buttons)
+   can override the --btn-* tokens; every other theme falls through to --accent
+   and is unaffected. */
+.btn-primary {
+  background: var(--btn-bg, var(--accent));
+  color: var(--on-accent); font-weight: 700; border: none; border-radius: 8px;
+  padding: 0 24px; font-size: .95rem; min-width: 116px; cursor: pointer;
+  box-shadow: 0 0 16px rgba(var(--btn-rgb, var(--accent-rgb)), .25);
+  transition: box-shadow .2s, background .2s;
+}
+/* Hover brightens and glows but must not move the button — a shifting target
+   is annoying to click, and in a row of controls it broke the alignment. */
+.btn-primary:hover:not(:disabled) { background: var(--btn-bg-hover, var(--accent-strong)); box-shadow: 0 0 22px rgba(var(--btn-rgb, var(--accent-rgb)), .45); }
+.btn-primary:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+
+.hint { color: var(--text-muted); font-size: .85rem; margin: 12px 0 4px; }
+
+/* ── Per-function help ───────────────────────────────────────────────────── */
+/* The ? sits top-right of the input card. The row pulls up into the card's own
+   padding so it costs no vertical space above the first field. */
+/* The ? is pinned to the card's top-right corner rather than given a row of its
+   own, so it sits level with the first field's label and costs no height. `top`
+   centres it against that label's line (22px card padding + half a label). */
+.card { position: relative; }
+.card > .help-btn { position: absolute; top: 16px; right: 16px; }
+.help-btn { width: 28px; height: 28px; }
+
+.help-dialog { width: 620px; }
+.help-dialog .dlg-head h2 { font-family: var(--font-head); }
+.help-lead { font-size: .9rem; line-height: 1.6; color: var(--text); margin-bottom: 16px; }
+.help-dialog h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
+  color: var(--accent2); margin: 20px 0 8px; padding-top: 14px;
+  border-top: 1px solid var(--border-soft); }
+.help-dialog p { font-size: .86rem; line-height: 1.6; color: var(--text-muted); margin: 10px 0; }
+.help-list { display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; margin: 0; }
+.help-list dt { font-size: .84rem; font-weight: 600; color: var(--text); }
+.help-list dd { font-size: .84rem; line-height: 1.55; color: var(--text-muted); }
+.help-list dd strong { color: var(--text); font-weight: 600; }
+.help-note { font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-muted); font-size: .72rem; font-style: italic; margin-left: 4px; }
+/* Narrow dialog: stack each term above its description rather than squeeze it. */
+@media (max-width: 620px) {
+  .help-list { grid-template-columns: 1fr; gap: 2px; }
+  .help-list dd { margin-bottom: 8px; }
+}
+
+/* Two field groups side by side, so a form is wide rather than tall. Groups
+   inside drop their own top margin — the grid owns the spacing. `align-items:
+   start` keeps a short column from stretching to match a tall one. Below the
+   breakpoint the columns stack, which is the old single-column form. */
+.form-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px;
+  align-items: start; margin-top: 18px; }
+.form-cols > .opt-group, .form-cols > .field-col { margin-top: 0; }
+/* When the columns are the card's first content (Exposure Probe, Repo Audit),
+   drop the top margin so their labels stay level with the ? in the corner. */
+.card > .help-btn + .form-cols { margin-top: 0; }
+.field-col { min-width: 0; }
+/* Credentials stack (username above password) when they sit in a column, and
+   drop their own offset/gap so each field lines up with the option row
+   beside it — same start, same 47px height, same 8px gap. */
+.form-cols .cred-grid { grid-template-columns: 1fr; margin-top: 0; gap: 8px; }
+@media (max-width: 900px) { .form-cols { grid-template-columns: 1fr; } }
+
+.opt-group { border: none; margin-top: 18px; }
+/* 8px matches .field-label's margin-bottom, so a column headed by a legend
+   and one headed by a label start their fields at the same height. */
+.opt-group legend { font-size: .8rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--text-muted); padding-bottom: 8px; }
+/* Options are a single line now that their descriptions live in the help dialog,
+   so the control centres against the label instead of hanging at the top. */
+.opt {
+  display: flex; gap: 11px; align-items: center;
+  padding: 11px 12px; margin-bottom: 8px;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; transition: border-color .15s;
+}
+.opt:hover { border-color: var(--accent); }
+.opt input { accent-color: var(--accent); width: 16px; height: 16px; flex: none; cursor: pointer; }
+.opt-body { display: flex; flex-direction: column; gap: 2px; }
+.opt-body strong { font-size: .92rem; font-weight: 600; }
+
+.legend-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted);
+  font-size: .72rem; font-style: italic; margin-left: 4px; }
+.cred-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.cred-grid input {
+  background: var(--bg-input); border: 2px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 11px 14px; font-size: 1rem;
+  font-family: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  transition: border-color .2s, box-shadow .2s;
+}
+.cred-grid input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.cred-grid input::placeholder { color: var(--text-muted); }
+@media (max-width: 520px) { .cred-grid { grid-template-columns: 1fr; } }
+
+/* ── Status / spinner ────────────────────────────────────────────────────── */
+.status { padding: 14px 16px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--bg-surface); font-size: .9rem; }
+.status--busy { border-color: var(--accent); display: flex; align-items: center; gap: 10px; }
+.status--error { border-color: rgba(255, 123, 123, .5); background: rgba(220, 53, 69, .12); color: #ff8a8a; }
+.status--error .cmd { margin-top: 8px; }
+.spinner { width: 16px; height: 16px; flex: none; border: 2px solid var(--accent-dim);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Result sections ─────────────────────────────────────────────────────── */
+/* Every results pane, matched on the `-results` id suffix the panes already use
+   (the reset in index.html selects them the same way). This was an id list of
+   just #scan-results and #url-results, which left the other four panes with no
+   gap at all — so their report bar sat flush against the first card, and
+   .report-actions' -4px pulled it into the card. */
+[id$="-results"] { display: flex; flex-direction: column; gap: 18px; }
+.result-section { border-left: 4px solid var(--accent); }
+.result-section h3 { color: var(--accent-strong); font-size: 1.2rem; margin-bottom: 15px;
+  display: flex; align-items: center; gap: 10px; }
+.sub { font-size: .82rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin: 16px 0 8px; }
+
+.info-grid { display: grid; gap: 12px; }
+.info-item { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+.info-item strong { color: var(--text); font-weight: 600; }
+.info-item span { text-align: right; word-break: break-word; }
+.muted { color: var(--text-muted); font-style: italic; }
+.mono.small { font-size: .74rem; word-break: break-all; }
+
+/* ── Key/value rows (security headers, status) ───────────────────────────── */
+.kv-list { display: grid; gap: 10px; }
+.kv-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  padding: 12px; background: var(--bg-surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+.kv-name { font-weight: 600; color: var(--text); min-width: 190px; }
+.kv-val { text-align: right; word-break: break-all; }
+.kv-val.found { color: var(--accent); }
+.kv-val.not-found { color: var(--danger); }
+.kv-val.warn { color: var(--warn); }
+
+/* ── Security scorecard ──────────────────────────────────────────────────── */
+.scorecard .score-head { display: flex; align-items: center; gap: 20px; margin-bottom: 18px; }
+.score-ring { flex: none; width: 92px; height: 92px; border-radius: 50%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 4px solid var(--border); background: var(--bg-surface); }
+.score-ring.score-good { border-color: var(--accent); box-shadow: 0 0 22px var(--accent-dim); }
+.score-ring.score-warn { border-color: var(--warn); }
+.score-ring.score-bad  { border-color: var(--danger); }
+.score-num { font-size: 1.9rem; font-weight: 700; line-height: 1; color: var(--text);
+  font-family: var(--font-head); }
+.score-max { font-size: .72rem; color: var(--text-muted); }
+.score-verdict h3 { margin: 0 0 8px; }
+.score-badge { font-size: .78rem; font-weight: 700; padding: 3px 12px; border-radius: 20px;
+  text-transform: uppercase; letter-spacing: .5px; }
+.score-badge.score-good { background: var(--accent-dim); color: var(--accent-strong); }
+.score-badge.score-warn { background: rgba(245, 196, 81, .16); color: var(--warn); }
+.score-badge.score-bad  { background: rgba(255, 85, 99, .16); color: var(--danger); }
+.score-list { display: grid; gap: 8px; }
+.score-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+  padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--border); border-radius: 6px; }
+.score-row.score-good { border-left-color: var(--accent); }
+.score-row.score-warn { border-left-color: var(--warn); }
+.score-row.score-bad  { border-left-color: var(--danger); }
+.score-row.score-na   { opacity: .6; }
+.score-cat { font-weight: 600; color: var(--text); min-width: 170px; }
+.score-detail { text-align: right; color: var(--text-muted); font-size: .88rem; }
+.score-note { margin-top: 12px; font-size: .8rem; }
+
+/* ── TLS protocol tags + CSP/HSTS issue rows ─────────────────────────────── */
+.proto-block { margin-top: 14px; }
+.proto-block > strong { display: block; margin-bottom: 8px; font-size: .82rem;
+  color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.proto-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.proto-tag { font-family: var(--font-mono); font-size: .78rem; font-weight: 600;
+  padding: 3px 10px; border-radius: 20px; border: 1px solid var(--border); }
+.proto-tag.proto-ok  { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.proto-tag.proto-off { color: var(--text-muted); }
+.proto-tag.proto-bad { color: var(--danger); border-color: var(--danger); background: rgba(255,85,99,.12); }
+.proto-tag.proto-unknown { color: var(--text-muted); border-style: dashed; }
+
+.issue-list { display: grid; gap: 6px; margin: -4px 0 4px; padding-left: 4px; }
+.issue-row { font-size: .84rem; padding: 7px 11px; border-radius: 6px;
+  border-left: 3px solid var(--border); background: var(--bg-surface); }
+.issue-row.issue-high { border-left-color: var(--danger); color: var(--danger); }
+.issue-row.issue-med  { border-left-color: var(--warn); color: var(--warn); }
+.issue-row.issue-low  { border-left-color: var(--warn); color: var(--text-muted); }
+.issue-row.issue-ok   { border-left-color: var(--accent); color: var(--text-muted); }
+
+/* ── Tables (ports, cookies) ─────────────────────────────────────────────── */
+.data-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.data-table th { text-align: left; color: var(--text-muted); font-size: .74rem; text-transform: uppercase;
+  letter-spacing: .5px; padding: 8px 10px; background: var(--bg-input); border-bottom: 2px solid var(--border); }
+.data-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+.data-table tr:last-child td { border-bottom: none; }
+.flag-ok { color: var(--accent); font-weight: 600; text-align: center; }
+.flag-bad { color: var(--danger); font-weight: 600; text-align: center; }
+
+/* ── Badges / states ─────────────────────────────────────────────────────── */
+.badge { font-size: .72rem; font-weight: 700; padding: 2px 9px; border-radius: 20px;
+  text-transform: uppercase; letter-spacing: .5px; }
+.badge-up { background: var(--accent-dim); color: var(--accent); }
+.badge-down { background: #2a1414; color: var(--danger); }
+.state { font-size: .74rem; font-weight: 700; padding: 1px 8px; border-radius: 5px; }
+.st-open { background: var(--accent-dim); color: var(--accent); }
+.st-filtered { background: #2a2410; color: #d8b43a; }
+.st-other { background: var(--bg-elevated); color: var(--text-muted); }
+
+.hop-status { font-weight: 700; font-size: .85rem; padding: 2px 8px; border-radius: 4px; }
+.status-2xx { background: rgba(46, 204, 113, .18); color: #6ee7a0; }
+.status-3xx { background: rgba(56, 189, 248, .18); color: #7dd3fc; }
+.status-4xx { background: rgba(244, 197, 66, .18); color: #f4d06a; }
+.status-5xx { background: rgba(220, 53, 69, .2); color: #ff8a8a; }
+.status-unknown { background: rgba(148, 163, 148, .15); color: #aab6ab; }
+
+.os-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.os-list li { font-size: .9rem; }
+.acc { display: inline-block; min-width: 44px; font-weight: 700; color: var(--accent); font-family: monospace; }
+
+/* ── Redirect chain ──────────────────────────────────────────────────────── */
+.redirect-chain { display: flex; flex-direction: column; gap: 8px; }
+.redirect-hop { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap;
+  background: var(--bg-surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+.hop-index { background: var(--accent); color: var(--on-accent); border-radius: 50%; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; flex-shrink: 0; }
+.hop-url { flex: 1; word-break: break-all; font-size: .9rem; }
+
+/* ── Ports grid (url analyzer) ───────────────────────────────────────────── */
+.port-range { font-size: .82rem; font-weight: 400; color: var(--text-muted); }
+.port-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.port-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  background: var(--bg-surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+.port-number { background: var(--accent); color: var(--on-accent); padding: 2px 8px; border-radius: 4px;
+  font-size: .8rem; font-weight: 700; min-width: 48px; text-align: center; flex-shrink: 0; }
+.port-service { font-size: .9rem; word-break: break-word; }
+
+/* ── TLS certificate ─────────────────────────────────────────────────────── */
+.warning-banner { background: rgba(244, 197, 66, .12); border: 1px solid rgba(244, 197, 66, .5);
+  color: #f4d06a; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-weight: 600; }
+.expiry-badge { padding: 2px 10px; border-radius: 12px; font-weight: 600; font-size: .85rem; }
+.expiry-ok { background: rgba(46, 204, 113, .18); color: #6ee7a0; }
+.expiry-warning { background: rgba(244, 197, 66, .18); color: #f4d06a; }
+.expiry-danger { background: rgba(220, 53, 69, .2); color: #ff8a8a; }
+.expiry-expired { background: #7f1d1d; color: #ffd5d5; }
+.sans-block { margin-top: 14px; }
+.sans-block strong { display: block; margin-bottom: 8px; color: var(--text); }
+.sans-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.san-tag { background: var(--accent-dim); color: var(--accent-strong); padding: 3px 10px;
+  border-radius: 12px; font-size: .8rem; font-family: monospace; }
+.san-tag.more { background: rgba(148, 163, 148, .15); color: #aab6ab; font-family: inherit; }
+
+/* ── DNS records ─────────────────────────────────────────────────────────── */
+.dns-records { display: flex; flex-direction: column; gap: 8px; }
+.dns-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px;
+  background: var(--bg-surface); border: 1px solid var(--border-soft); border-radius: 6px; }
+.dns-type { background: var(--accent); color: var(--on-accent); padding: 2px 8px; border-radius: 4px;
+  font-size: .75rem; font-weight: 700; min-width: 48px; text-align: center; flex-shrink: 0; margin-top: 1px; }
+.dns-txt { font-family: monospace; font-size: .82rem; word-break: break-all; color: var(--text-muted); }
+
+/* ── File content / raw command ──────────────────────────────────────────── */
+.file-content, .stderr { margin-top: 12px; padding: 14px; background: #060f1f; color: #b7cdec;
+  border: 1px solid var(--border-soft); border-radius: 6px; font-family: monospace; font-size: .82rem;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow-y: auto; }
+.raw summary { cursor: pointer; font-size: .85rem; color: var(--text-muted); font-weight: 600; }
+.raw summary:hover { color: var(--accent); }
+.cmd { margin-top: 10px; padding: 10px 12px; background: var(--bg-input); border: 1px solid var(--border-soft);
+  border-radius: 6px; font-family: monospace; font-size: .82rem; color: var(--accent-strong); word-break: break-all; }
+.stderr { color: var(--text-muted); }
+
+.timestamp { text-align: center; color: var(--text-muted); font-size: .8rem; padding-top: 6px; }
+
+/* ── Availability dashboard ──────────────────────────────────────────────── */
+#dash-summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.dash-counts { display: flex; gap: 22px; align-items: baseline; }
+.dash-count { color: var(--text-muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .5px; }
+.dash-num { font-family: var(--font-mono); font-size: 1.5rem; font-weight: 700; color: var(--accent); margin-right: 6px; }
+.dash-num.down { color: var(--danger); }
+.dash-num.muted-num { color: var(--text-muted); }
+.dash-actions { display: flex; gap: 8px; align-items: center; }
+/* "Add monitor" sits in this row, so it shouldn't tower over the secondary
+   buttons the way a form's submit button does. */
+.dash-actions .btn-primary { min-width: 0; padding: 0 18px; height: 38px; }
+
+#dash-monitors, #dash-events { display: flex; flex-direction: column; gap: 18px; }
+.mon-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+@media (max-width: 520px) { .mon-grid { grid-template-columns: 1fr; } }
+.mon-input {
+  width: 100%; background: var(--bg-input); border: 2px solid var(--border); border-radius: 8px;
+  color: var(--text); padding: 10px 12px; font-size: .95rem; font-family: inherit;
+  transition: border-color .2s, box-shadow .2s;
+}
+.mon-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+#monitor-form .field-label { margin-top: 4px; }
+#monitor-form > .mon-input, #monitor-form > .field-label { margin-bottom: 12px; }
+/* A plain row of buttons (Settings → Data). */
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.mon-row-actions { white-space: nowrap; text-align: right; }
+.linkbtn {
+  background: none; border: none; color: var(--accent-strong); cursor: pointer;
+  font-family: inherit; font-size: .82rem; padding: 2px 6px; border-radius: 4px;
+}
+.linkbtn:hover { background: var(--bg-elevated); }
+.linkbtn.danger { color: var(--danger); }
+
+/* ── Create Report bar ───────────────────────────────────────────────────── */
+.report-actions { display: flex; justify-content: flex-end; margin-bottom: -4px; }
+.report-actions .report-btn { align-self: auto; padding: 7px 14px; font-size: .82rem; }
+
+/* ── Repo Audit severity filter ──────────────────────────────────────────── */
+.sev-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 18px; }
+.sev-filter-label { font-size: .8rem; font-weight: 600; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--text-muted); margin-right: 4px; }
+.sev-chip { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none;
+  text-transform: capitalize; font-size: .82rem; padding: 5px 12px; border-radius: 20px;
+  border: 1px solid var(--border); background: var(--bg-elevated); }
+.sev-chip input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.sev-chip.sev-critical { color: #ff8a8a; }
+.sev-chip.sev-high { color: #ffb36a; }
+.sev-chip.sev-medium { color: #f4d06a; }
+.sev-chip.sev-low { color: #7dd3fc; }
+.sev-chip.sev-informational { color: var(--text-muted); }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+/* Portrait, or any landscape window too narrow for two useful columns: drop the
+   split. `display: contents` dissolves the pane boxes so their cards become
+   direct children of the view's flex column — i.e. the original single-column
+   layout, with `.main` doing the scrolling again. */
+@media (orientation: portrait), (max-width: 1100px) {
+  .main { overflow-y: auto; }
+  .view.active {
+    display: flex; flex-direction: column; gap: 18px;
+    max-width: 800px; flex: none;
+  }
+  .pane-input, .pane-output { display: contents; }
+}
+
+@media (max-width: 720px) {
+  body { height: auto; overflow: auto; }
+  .main { overflow: visible; }
+  .layout { grid-template-columns: 1fr; }
+  .sidebar { height: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar-section { display: none; }
+  .menu-item { white-space: nowrap; }
+  .input-group { flex-direction: column; }
+  .info-item, .kv-row { flex-direction: column; align-items: flex-start; gap: 5px; }
+  .info-item span, .kv-val { text-align: left; }
+  .kv-name { min-width: auto; }
+}

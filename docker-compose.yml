@@ -1,0 +1,38 @@
+services:
+  netscan:
+    build: .
+    image: netscan:latest
+    container_name: netscan
+    restart: unless-stopped
+    ports:
+      - "8090:8080"          # http://localhost:8090
+    environment:
+      SCAN_TIMEOUT: "300"    # max seconds per scan
+      AUDIT_ROOT: "/audit"   # where local clones are mounted (see volumes below)
+      DB_PATH: "/data/secanalysis.db"   # Availability Dashboard store (see volumes)
+
+    # ── Repo Audit: local clones ───────────────────────────────────────────
+    # The Repo Audit "local clone" mode scans repos you've cloned yourself, so
+    # you can audit private / organisation repos without putting a GitHub token
+    # in this app. Point AUDIT_DIR at the host folder holding your clones
+    # (defaults to ./audit) — it's mounted read-only:
+    volumes:
+      - "${AUDIT_DIR:-./audit}:/audit:ro"
+      # Availability Dashboard: persists monitors + check history across restarts.
+      - "${DATA_DIR:-./data}:/data"
+
+    # NET_RAW / NET_ADMIN let nmap send raw packets, which it needs for
+    # SYN scans and OS detection (-O). Without them nmap falls back to a
+    # slower TCP-connect scan and OS detection won't work.
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    # ── Scanning the host's own LAN ────────────────────────────────────────
+    # With the default bridge network above, the container reaches other
+    # machines on your LAN through the host's routing, which is fine for most
+    # scans. If you need to scan the host itself or get the most accurate
+    # results, comment out `ports:` above and uncomment the line below to put
+    # the container directly on the host network (then browse to :8080):
+    #
+    # network_mode: host

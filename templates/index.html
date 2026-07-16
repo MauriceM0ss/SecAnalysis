@@ -1,0 +1,3069 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SecAnalysis</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <!-- Apply the saved theme before the stylesheet paints, to avoid a flash. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('secanalysis-theme') || 'neon';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'neon'); }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+  <!-- ── Top bar ──────────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="logo">
+      <img class="logo-icon" src="{{ url_for('static', filename='favicon.svg') }}" alt="">
+      <span class="logo-text">SecAnalysis</span>
+    </div>
+    <span class="header-title" id="header-subtitle">Local Network Scanner</span>
+    <div class="header-actions">
+      <button class="icon-btn" id="reset-btn" type="button" title="Clear all results &amp; reset"
+              aria-label="Clear all results and reset">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="23 4 23 10 17 10"></polyline>
+          <polyline points="1 20 1 14 7 14"></polyline>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+      </button>
+      <button class="icon-btn" id="console-btn" type="button" title="Console (ping, traceroute, dig, whois)"
+              aria-label="Open console" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+          <polyline points="6 9 9 12 6 15"></polyline>
+          <line x1="12" y1="15" x2="17" y2="15"></line>
+        </svg>
+      </button>
+      <button class="icon-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings"
+              aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- ── Left menu ──────────────────────────────────────────────────── -->
+    <nav class="sidebar" aria-label="Functions">
+      <div class="sidebar-section">Functions</div>
+      <button class="menu-item active" data-view="netscan">
+        <span class="menu-text"><strong>Network Scan</strong></span>
+      </button>
+      <!-- The chevron is a sibling of the menu button, not a child: a button
+           can't nest inside a button, and the two do different things (switch
+           view vs. collapse the saved list). -->
+      <div class="menu-row">
+        <button class="menu-item" data-view="subnet">
+          <span class="menu-text"><strong>Subnet Scan</strong></span>
+        </button>
+        <button class="submenu-toggle" id="subnet-toggle" type="button" hidden
+                aria-expanded="true" aria-controls="subnet-submenu"
+                aria-label="Collapse saved scans" title="Collapse saved scans">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
+      <!-- Saved subnet scans, nested under their tool. Populated from
+           /api/subnet-scans; stays empty (and takes no space) until you save one. -->
+      <div class="submenu" id="subnet-submenu" role="group" aria-label="Saved subnet scans"></div>
+      <button class="menu-item" data-view="url">
+        <span class="menu-text"><strong>URL Analyzer</strong></span>
+      </button>
+      <button class="menu-item" data-view="exposure">
+        <span class="menu-text"><strong>Exposure Probe</strong></span>
+      </button>
+      <button class="menu-item" data-view="repo">
+        <span class="menu-text"><strong>Repo Audit</strong></span>
+      </button>
+      <div class="menu-row">
+        <button class="menu-item" data-view="subdomains">
+          <span class="menu-text"><strong>Subdomains</strong></span>
+        </button>
+        <button class="submenu-toggle" id="subdomains-toggle" type="button" hidden
+                aria-expanded="true" aria-controls="subdomains-submenu"
+                aria-label="Collapse saved scans" title="Collapse saved scans">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
+      <div class="submenu" id="subdomains-submenu" role="group" aria-label="Saved subdomain scans"></div>
+      <button class="menu-item" data-view="dashboard">
+        <span class="menu-text"><strong>Availability</strong></span>
+      </button>
+      <button class="menu-item" data-view="history">
+        <span class="menu-text"><strong>History</strong></span>
+      </button>
+
+      <div class="sidebar-status" title="Application version">
+        <span class="app-name">SecAnalysis</span>
+        <span class="app-version">v{{ version }}</span>
+      </div>
+    </nav>
+
+
+    <!-- ── Main ───────────────────────────────────────────────────────── -->
+    <main class="main">
+
+      <!-- ═══ View: Network Scan ══════════════════════════════════════ -->
+      <!-- Every view is: input pane · divider · output pane. On a portrait or
+           narrow screen the CSS dissolves the panes and stacks the cards. -->
+      <section class="view active" id="view-netscan">
+        <div class="pane-input">
+        <form id="scan-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="netscan"
+                  title="What do these fields do?" aria-label="Help: Network Scan"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <label class="field-label" for="target">Target</label>
+          <div class="input-group">
+            <input type="text" id="target" name="target" autocomplete="off" spellcheck="false"
+                   placeholder="192.168.1.10  or  host.local" required>
+            <button type="submit" id="scan-btn" class="btn-primary">Scan</button>
+          </div>
+
+          <div class="form-cols">
+            <fieldset class="opt-group">
+              <legend>Port range</legend>
+              <label class="opt"><input type="radio" name="ports" value="fast">
+                <span class="opt-body"><strong>Fast</strong></span></label>
+              <label class="opt"><input type="radio" name="ports" value="standard" checked>
+                <span class="opt-body"><strong>Standard</strong></span></label>
+              <label class="opt"><input type="radio" name="ports" value="full">
+                <span class="opt-body"><strong>Full</strong></span></label>
+            </fieldset>
+
+            <fieldset class="opt-group">
+              <legend>Extra checks</legend>
+              <label class="opt"><input type="checkbox" name="sV" checked>
+                <span class="opt-body"><strong>Service &amp; version detection</strong></span></label>
+              <label class="opt"><input type="checkbox" name="os">
+                <span class="opt-body"><strong>OS detection</strong></span></label>
+              <label class="opt"><input type="checkbox" name="scripts">
+                <span class="opt-body"><strong>Default scripts</strong></span></label>
+              <label class="opt"><input type="checkbox" name="skip_ping">
+                <span class="opt-body"><strong>Skip host discovery</strong></span></label>
+            </fieldset>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Scan results will appear here.
+            <span class="cursor"></span></div>
+          <div id="scan-status" class="status" hidden></div>
+          <div id="scan-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: Subnet Scan ════════════════════════════════════════ -->
+      <section class="view" id="view-subnet">
+        <div class="pane-input">
+        <form id="subnet-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="subnet"
+                  title="What do these fields do?" aria-label="Help: Subnet Scan"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <label class="field-label" for="subnet-cidr">Subnet</label>
+          <div class="input-group">
+            <input type="text" id="subnet-cidr" name="subnet" autocomplete="off" spellcheck="false"
+                   placeholder="192.168.1.0/24" required>
+            <button type="submit" id="subnet-btn" class="btn-primary">Sweep</button>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Live hosts will appear here.
+            <span class="cursor"></span></div>
+          <div id="subnet-status" class="status" hidden></div>
+          <div id="subnet-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: URL Analyzer ══════════════════════════════════════ -->
+      <section class="view" id="view-url">
+        <div class="pane-input">
+        <form id="url-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="url"
+                  title="What do these fields do?" aria-label="Help: URL Analyzer"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <label class="field-label" for="url">URL</label>
+          <div class="input-group">
+            <input type="text" id="url" name="url" autocomplete="off" spellcheck="false"
+                   placeholder="example.com  or  https://example.com" required>
+            <button type="submit" id="url-btn" class="btn-primary">Analyze</button>
+          </div>
+          <div class="form-cols">
+            <fieldset class="opt-group">
+              <legend>Options</legend>
+              <label class="opt"><input type="checkbox" name="portScan">
+                <span class="opt-body"><strong>Scan the first 1024 ports</strong></span></label>
+              <label class="opt"><input type="checkbox" name="dnsAuth">
+                <span class="opt-body"><strong>DNS &amp; email security (DMARC, DNSSEC, SPF, DKIM, MTA-STS, TLS-RPT)</strong></span></label>
+            </fieldset>
+
+            <fieldset class="opt-group">
+              <legend>Basic authentication <span class="legend-note">optional</span></legend>
+              <div class="cred-grid">
+                <input type="text" id="url-username" name="username" autocomplete="off"
+                       spellcheck="false" placeholder="Username">
+                <input type="password" id="url-password" name="password" autocomplete="off"
+                       placeholder="Password">
+              </div>
+            </fieldset>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Analysis results will appear here.
+            <span class="cursor"></span></div>
+          <div id="url-status" class="status" hidden></div>
+          <div id="url-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: Exposure Probe ═════════════════════════════════════ -->
+      <section class="view" id="view-exposure">
+        <div class="pane-input">
+        <form id="exposure-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="exposure"
+                  title="What do these fields do?" aria-label="Help: Exposure Probe"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <div class="form-cols">
+            <div class="field-col">
+              <label class="field-label" for="exp-url">Staging URL</label>
+              <div class="input-group">
+                <input type="text" id="exp-url" name="url" autocomplete="off" spellcheck="false"
+                       placeholder="https://staging.example.com" required>
+                <button type="submit" id="exp-btn" class="btn-primary">Probe</button>
+              </div>
+            </div>
+            <fieldset class="opt-group">
+              <legend>Basic authentication <span class="legend-note">optional</span></legend>
+              <div class="cred-grid">
+                <input type="text" id="exp-username" name="username" autocomplete="off"
+                       spellcheck="false" placeholder="Username">
+                <input type="password" id="exp-password" name="password" autocomplete="off"
+                       placeholder="Password">
+              </div>
+            </fieldset>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Probe results will appear here.
+            <span class="cursor"></span></div>
+          <div id="exp-status" class="status" hidden></div>
+          <div id="exp-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: Repo Audit ═════════════════════════════════════════ -->
+      <section class="view" id="view-repo">
+        <div class="pane-input">
+        <form id="repo-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="repo"
+                  title="What do these fields do?" aria-label="Help: Repo Audit"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <div class="form-cols">
+            <fieldset class="opt-group">
+              <legend>Source</legend>
+              <label class="opt"><input type="radio" name="repo-source" value="remote" checked>
+                <span class="opt-body"><strong>Remote repository</strong></span></label>
+              <label class="opt"><input type="radio" name="repo-source" value="local">
+                <span class="opt-body"><strong>Local clone</strong></span></label>
+            </fieldset>
+            <div class="field-col">
+              <label class="field-label" id="repo-input-label" for="repo-url">Repository URL</label>
+              <div class="input-group">
+                <input type="text" id="repo-url" name="repo" autocomplete="off" spellcheck="false"
+                       placeholder="https://github.com/owner/project">
+                <select id="repo-local" name="local" hidden></select>
+                <button type="submit" id="repo-btn" class="btn-primary">Audit</button>
+              </div>
+            </div>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Audit results will appear here.
+            <span class="cursor"></span></div>
+          <div id="repo-status" class="status" hidden></div>
+          <div id="repo-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: Subdomains ═════════════════════════════════════════ -->
+      <section class="view" id="view-subdomains">
+        <div class="pane-input">
+        <form id="subdomains-form" class="card">
+          <button type="button" class="icon-btn help-btn" data-help="subdomains"
+                  title="What do these fields do?" aria-label="Help: Subdomains"
+                  aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"></circle>
+              <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+          </button>
+          <label class="field-label" for="subdomains-domain">Main domain</label>
+          <div class="input-group">
+            <input type="text" id="subdomains-domain" name="domain" autocomplete="off" spellcheck="false"
+                   placeholder="example.com" required>
+            <button type="submit" id="subdomains-btn" class="btn-primary">Find</button>
+          </div>
+        </form>
+        </div>
+
+        <div class="pane-output">
+          <div class="pane-empty"><span class="prompt">&gt;</span> Discovered subdomains will appear here.
+            <span class="cursor"></span></div>
+          <div id="subdomains-status" class="status" hidden></div>
+          <div id="subdomains-results"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: Availability Dashboard ═════════════════════════════ -->
+      <section class="view" id="view-dashboard">
+        <div class="pane-input">
+        <div class="card" id="dash-summary">
+          <div class="dash-counts">
+            <span class="dash-count"><span class="dash-num" id="dc-up">0</span> up</span>
+            <span class="dash-count"><span class="dash-num down" id="dc-down">0</span> down</span>
+            <span class="dash-count"><span class="dash-num muted-num" id="dc-unknown">0</span> unknown</span>
+          </div>
+          <div class="dash-actions">
+            <button class="btn-secondary" id="notify-enable" type="button" hidden>Enable notifications</button>
+            <button class="btn-primary" id="monitor-add" type="button">Add monitor</button>
+            <button class="btn-secondary" id="dash-refresh" type="button">Refresh</button>
+            <!-- Inline rather than pinned to the card corner: this row already
+                 occupies the card's top-right, so an absolute ? would land on it. -->
+            <button type="button" class="icon-btn help-btn" data-help="dashboard"
+                    title="What do these fields do?" aria-label="Help: Availability"
+                    aria-haspopup="dialog">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        </div>
+
+        <div class="pane-output">
+          <div id="dash-monitors"></div>
+          <div id="dash-events"></div>
+        </div>
+      </section>
+
+      <!-- ═══ View: History (saved reports) ════════════════════════════ -->
+      <section class="view view-full" id="view-history">
+        <div class="pane-output">
+          <div class="history-toolbar">
+            <label class="field-label" for="history-tool">Tool</label>
+            <select id="history-tool" class="mon-input history-select">
+              <option value="all">All tools</option>
+              <option value="netscan">Network Scan</option>
+              <option value="subnet">Subnet Scan</option>
+              <option value="url">URL Analyzer</option>
+              <option value="exposure">Exposure Probe</option>
+              <option value="repo">Repo Audit</option>
+              <option value="subdomains">Subdomains</option>
+            </select>
+            <button class="btn-secondary" id="history-refresh" type="button">Refresh</button>
+            <!-- History has a toolbar rather than an input card, so its help
+                 button rides at the end of the row (pushed right in CSS). -->
+            <button type="button" class="icon-btn help-btn" data-help="history"
+                    title="What do these fields do?" aria-label="Help: History"
+                    aria-haspopup="dialog">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </button>
+          </div>
+          <div id="history-list"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Availability: add / edit a monitor. The fields live in a dialog rather
+       than in the view, so the dashboard shows monitors instead of a form. Used
+       for both Add (empty) and Edit (populated) — monitor-id decides which. -->
+  <dialog class="finding-dialog monitor-dialog" id="monitor-dialog" aria-labelledby="monitor-title">
+    <div class="dlg-head">
+      <h2 id="monitor-title">Add monitor</h2>
+      <button class="icon-btn dlg-x" id="monitor-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <form id="monitor-form">
+      <div class="dlg-body">
+            <input type="hidden" id="monitor-id" value="">
+            <div class="mon-grid">
+              <div>
+                <label class="field-label" for="monitor-name">Name</label>
+                <input class="mon-input" type="text" id="monitor-name" autocomplete="off" placeholder="Production API" required>
+              </div>
+              <div>
+                <label class="field-label" for="monitor-type">Type</label>
+                <select class="mon-input" id="monitor-type">
+                  <option value="http">HTTP / HTTPS</option>
+                  <option value="api">API (HTTP + auth)</option>
+                  <option value="tcp">TCP port</option>
+                  <option value="icmp">ICMP ping</option>
+                </select>
+              </div>
+            </div>
+
+            <label class="field-label" for="monitor-target" id="monitor-target-label">URL</label>
+            <input class="mon-input" type="text" id="monitor-target" autocomplete="off" spellcheck="false"
+                   placeholder="https://api.example.com/health" required>
+
+            <div class="mon-grid" id="mon-field-port" hidden>
+              <div>
+                <label class="field-label" for="monitor-port">TCP port</label>
+                <input class="mon-input" type="number" id="monitor-port" min="1" max="65535" placeholder="443">
+              </div>
+            </div>
+
+            <div class="mon-grid" id="mon-field-http" hidden>
+              <div>
+                <label class="field-label" for="monitor-status">Expected status <span class="legend-note">optional</span></label>
+                <input class="mon-input" type="number" id="monitor-status" min="100" max="599" placeholder="any 2xx/3xx">
+              </div>
+              <div>
+                <label class="field-label" for="monitor-keyword">Body keyword <span class="legend-note">optional</span></label>
+                <input class="mon-input" type="text" id="monitor-keyword" autocomplete="off" placeholder="e.g. &quot;ok&quot;">
+              </div>
+            </div>
+
+            <div id="mon-field-auth" hidden>
+              <label class="field-label" for="monitor-auth">Authorization header <span class="legend-note">optional</span></label>
+              <input class="mon-input" type="text" id="monitor-auth" autocomplete="off" spellcheck="false"
+                     placeholder="Bearer eyJhbGciOi…">
+            </div>
+
+            <label class="field-label" for="monitor-interval">Check interval</label>
+            <select class="mon-input" id="monitor-interval">
+              <option value="30">Every 30 seconds</option>
+              <option value="60">Every minute</option>
+              <option value="300" selected>Every 5 minutes</option>
+              <option value="900">Every 15 minutes</option>
+              <option value="3600">Every hour</option>
+            </select>
+        <div id="monitor-error" class="status status--error" hidden></div>
+      </div>
+      <div class="dlg-foot">
+        <button class="btn-secondary" id="monitor-cancel" type="button">Cancel</button>
+        <button class="btn-primary" id="monitor-submit" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ── Help content ─────────────────────────────────────────────────────
+       One template per function, shown by the ? button on that function's input
+       box. This is where the explanations that used to sit permanently under
+       every field now live: same prose, only on request. Kept as <template> so
+       it stays editable markup rather than a JS string, and costs nothing until
+       it's cloned into the dialog. -->
+
+  <template id="help-netscan" data-title="Network Scan">
+    <p class="help-lead">Scans one host: resolves the name&nbsp;⇄&nbsp;IP, then runs the
+      selected checks with <code>nmap</code>.</p>
+    <dl class="help-list">
+      <dt>Target</dt>
+      <dd>A local IP address or a hostname — <code>192.168.1.10</code> or
+        <code>host.local</code>. Both directions of DNS are resolved for you, so the
+        result shows the name and the address whichever you type.</dd>
+      <dt>Scan</dt>
+      <dd>Runs the scan. Long scans can be left running while you use other tools.</dd>
+    </dl>
+    <h4>Port range</h4>
+    <dl class="help-list">
+      <dt>Fast</dt><dd>~100 most common ports. Quickest, but can miss things.</dd>
+      <dt>Standard</dt><dd>nmap's top 1000 ports. Good default.</dd>
+      <dt>Full</dt><dd>All 65,535 ports. Thorough, but slow.</dd>
+    </dl>
+    <h4>Extra checks</h4>
+    <dl class="help-list">
+      <dt>Service &amp; version detection</dt>
+      <dd>Probe each open port to identify the running service and its software version
+        (e.g. <code>OpenSSH 9.6</code>).</dd>
+      <dt>OS detection</dt>
+      <dd>Guess the operating system from its TCP/IP fingerprint. Needs raw-socket
+        privileges and works best with some open ports.</dd>
+      <dt>Default scripts</dt>
+      <dd>Run nmap's default NSE scripts for extra detail — banners, certificates, and
+        common misconfigurations.</dd>
+      <dt>Skip host discovery</dt>
+      <dd>Treat the host as online even if it doesn't answer pings (<code>-Pn</code>).
+        Useful for firewalled machines.</dd>
+    </dl>
+  </template>
+
+  <template id="help-subnet" data-title="Subnet Scan">
+    <p class="help-lead">Finds which machines on a network are alive. Runs a host-discovery
+      sweep (<code>nmap -sn</code> — ARP&nbsp;/&nbsp;ICMP, no port scan) and lists whatever
+      answers.</p>
+    <dl class="help-list">
+      <dt>Subnet</dt>
+      <dd>A network in CIDR notation, e.g. <code>192.168.1.0/24</code>. Limit:
+        <strong>1024 addresses</strong> (≈&nbsp;a /22 or smaller).</dd>
+      <dt>Sweep</dt>
+      <dd>Runs the sweep. A host that blocks ping/ARP won't appear — you can still scan
+        it directly in Network Scan.</dd>
+    </dl>
+    <h4>On each result row</h4>
+    <dl class="help-list">
+      <dt>Copy</dt><dd>Copies that IP to the clipboard.</dd>
+      <dt>Scan this IP <span aria-hidden="true">◎</span></dt>
+      <dd>Pre-fills the address into <strong>Network Scan</strong> for a detailed look.</dd>
+      <dt>Note</dt>
+      <dd>Only in a saved scan: a free-text note for that address. Shown as one line in
+        the table, in full on hover.</dd>
+    </dl>
+    <h4>Saved scans</h4>
+    <dl class="help-list">
+      <dt>Save scan</dt>
+      <dd>Stores the result under a name; it appears under Subnet Scan in the menu and
+        can be reopened with every button still working.</dd>
+      <dt>Refresh</dt>
+      <dd>Re-sweeps the same subnet and marks what's <strong>new</strong> or
+        <strong>gone</strong> since the last run. Your notes are kept.</dd>
+      <dt>Rename / Delete</dt>
+      <dd>Renames the saved scan, or deletes it along with its notes.</dd>
+    </dl>
+  </template>
+
+  <template id="help-url" data-title="URL Analyzer">
+    <p class="help-lead">Inspects security headers, the TLS certificate, DNS records,
+      redirect hygiene, mixed content &amp; third-party resources, cookies, and
+      <code>security.txt</code>/<code>robots.txt</code>, then rolls the findings into a
+      weighted security scorecard.</p>
+    <dl class="help-list">
+      <dt>URL</dt>
+      <dd>A URL or bare domain. If no scheme is given, <code>https://</code> is assumed.</dd>
+      <dt>Analyze</dt><dd>Runs the analysis.</dd>
+    </dl>
+    <h4>Options</h4>
+    <dl class="help-list">
+      <dt>Scan the first 1024 ports</dt>
+      <dd>TCP port scan of the resolved host via nmap. Slower.</dd>
+      <dt>DNS &amp; email security</dt>
+      <dd>DMARC policy — following parent-domain inheritance for subdomains — a DNSSEC
+        signing check, and the full mail-security posture (SPF, DKIM selectors, MTA-STS,
+        TLS-RPT). CAA is always shown under DNS Records, with or without this option.</dd>
+    </dl>
+    <h4>Basic authentication <span class="help-note">optional</span></h4>
+    <p>For URLs behind HTTP Basic Auth. Sent as an <code>Authorization</code> header on the
+      HEAD/GET/redirect/cookie probes. Leave both boxes empty if the site is public.</p>
+  </template>
+
+  <template id="help-exposure" data-title="Exposure Probe">
+    <p class="help-lead">Checks for sensitive files often left open on test/staging hosts —
+      <code>.git/</code>, <code>.env</code>, debug endpoints, Swagger docs. Each hit is
+      confirmed by a content signature, not just a <code>200</code> response, so it reports
+      far fewer false positives than a plain path check.</p>
+    <dl class="help-list">
+      <dt>Staging URL</dt>
+      <dd>The base URL to probe, e.g. <code>https://staging.example.com</code>.</dd>
+      <dt>Probe</dt><dd>Runs the probe.</dd>
+    </dl>
+    <h4>Basic authentication <span class="help-note">optional</span></h4>
+    <p>For staging behind HTTP Basic Auth. Sent as an <code>Authorization</code> header on
+      every probe request.</p>
+  </template>
+
+  <template id="help-repo" data-title="Repo Audit">
+    <p class="help-lead">Audits a Git repository with <code>gitleaks</code> (committed
+      secrets), <code>trivy</code> (dependency CVEs, IaC misconfiguration, licenses, SBOM),
+      <code>hadolint</code> (Dockerfiles) and <code>zizmor</code> (GitHub Actions
+      workflows). Large repos can take a while.</p>
+    <h4>Source</h4>
+    <dl class="help-list">
+      <dt>Remote repository</dt>
+      <dd>Shallow-clones a public github.com / gitlab.com repo. Because the clone is
+        shallow, gitleaks sees only recent history.</dd>
+      <dt>Local clone</dt>
+      <dd>Audits a repo you've already cloned into the mounted audit folder — for private
+        or organisation repos, with no GitHub token in this app. Full git history, so
+        secrets committed long ago are found too.</dd>
+    </dl>
+    <dl class="help-list">
+      <dt>Repository URL / Local clone</dt>
+      <dd>The repo to audit. The field changes to a picker of mounted clones when the
+        source is <strong>Local clone</strong>.</dd>
+      <dt>Audit</dt><dd>Runs every tool and groups the findings by severity.</dd>
+    </dl>
+    <p>Click any CVE or misconfiguration ID in the results for the full detail, and use the
+      severity chips above a table to filter it.</p>
+  </template>
+
+  <template id="help-subdomains" data-title="Subdomains">
+    <p class="help-lead">Passively enumerates subdomains from certificate-transparency and
+      passive-DNS sources (<code>crt.sh</code>, <code>certspotter</code>,
+      <code>hackertarget</code>), merges them, then resolves each to its current IPv4 so live
+      hosts are marked apart from names only ever seen in a certificate.
+      <strong>No traffic is sent to the target.</strong></p>
+    <dl class="help-list">
+      <dt>Main domain</dt>
+      <dd>The organisational domain, e.g. <code>example.com</code>. Subdomains of it are
+        discovered for you.</dd>
+      <dt>Find</dt><dd>Queries every source and merges the results.</dd>
+    </dl>
+    <h4>On each result row</h4>
+    <dl class="help-list">
+      <dt>Copy</dt><dd>Copies the subdomain to the clipboard.</dd>
+      <dt>Check if live <span aria-hidden="true">⚡</span></dt>
+      <dd>Probes that one host: DNS, ICMP, HTTPS and HTTP, side by side.</dd>
+      <dt>Open in new tab</dt><dd>Opens <code>https://</code> that name.</dd>
+      <dt>Scan this IP <span aria-hidden="true">◎</span></dt>
+      <dd>Pre-fills a resolved address into <strong>Network Scan</strong>.</dd>
+      <dt>Note</dt>
+      <dd>Only in a saved scan: a free-text note for that subdomain.</dd>
+    </dl>
+    <p>Wildcard entries (<code>*.example.com</code>) come from certificates and aren't real
+      hosts, so they only offer Copy.</p>
+    <h4>Saved scans</h4>
+    <p>Same as Subnet Scan: <strong>Save scan</strong> stores the result under the tool in
+      the menu, <strong>Refresh</strong> re-queries the logs and flags names that are
+      <strong>new</strong> or <strong>gone</strong>, and your notes survive a refresh.</p>
+  </template>
+
+  <template id="help-dashboard" data-title="Availability">
+    <p class="help-lead">Checks stay running in the background and record every status
+      change, so you can see what was down and when.</p>
+    <dl class="help-list">
+      <dt>Name</dt><dd>Whatever you want to call it in the list, e.g. "Production API".</dd>
+      <dt>Type</dt>
+      <dd><strong>HTTP / HTTPS</strong> — fetch a URL.
+        <strong>API (HTTP + auth)</strong> — the same, with an Authorization header.
+        <strong>TCP port</strong> — just check the port opens.
+        <strong>ICMP ping</strong> — check the host answers a ping.</dd>
+      <dt>URL / Host</dt>
+      <dd>What to check. A full URL for HTTP/API types, a hostname or IP for TCP and ICMP.</dd>
+      <dt>TCP port</dt><dd>TCP types only: the port to connect to (1–65535).</dd>
+      <dt>Expected status <span class="help-note">optional</span></dt>
+      <dd>Treat only this exact HTTP status as up. Left empty, any 2xx or 3xx counts as up.</dd>
+      <dt>Body keyword <span class="help-note">optional</span></dt>
+      <dd>The response body must contain this text, or the check counts as down — catches a
+        page that returns 200 while broken.</dd>
+      <dt>Authorization header <span class="help-note">optional</span></dt>
+      <dd>API type only. Sent verbatim, e.g. <code>Bearer eyJhbGciOi…</code>.</dd>
+      <dt>Check interval</dt><dd>How often the check runs, from 30 seconds to hourly.</dd>
+      <dt>Add monitor</dt><dd>Saves it and starts checking immediately.</dd>
+    </dl>
+    <p>On each monitor: <strong>Check now</strong> runs it immediately,
+      <strong>Pause</strong> stops it without deleting it, and <strong>Edit</strong> loads it
+      back into this form. Export/Import live in Settings&nbsp;→&nbsp;Data.</p>
+  </template>
+
+  <template id="help-history" data-title="History">
+    <p class="help-lead">Reports you saved with <strong>Add to history</strong> on any
+      tool's results. Each one is a self-contained HTML file stored on the server — a frozen
+      snapshot, not a live view, so it opens exactly as it looked when you saved it.</p>
+    <dl class="help-list">
+      <dt>Tool</dt><dd>Filters the list to one tool's reports.</dd>
+      <dt>Refresh</dt><dd>Re-reads the list from the server.</dd>
+      <dt>Open</dt><dd>Opens the stored report in a new tab.</dd>
+      <dt>Download</dt><dd>Saves the report's HTML file to disk.</dd>
+      <dt>Rename</dt><dd>Changes the label shown in this list. The file itself keeps its name.</dd>
+      <dt>Delete</dt><dd>Removes the report and its file. This cannot be undone.</dd>
+    </dl>
+    <p>For a scan you want to come back to and keep working with — refreshing it, annotating
+      hosts — use <strong>Save scan</strong> in Subnet Scan or Subdomains instead. That keeps
+      the data live rather than freezing the page.</p>
+  </template>
+
+  <!-- Help: per-function explanation of the fields and buttons. -->
+  <dialog class="finding-dialog help-dialog" id="help-dialog" aria-labelledby="help-title">
+    <div class="dlg-head">
+      <h2 id="help-title">Help</h2>
+      <button class="icon-btn dlg-x" id="help-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body" id="help-body"></div>
+    <div class="dlg-foot">
+      <button class="btn-secondary" id="help-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <!-- ── Settings dialog ─────────────────────────────────────────────────── -->
+  <dialog class="settings-dialog" id="settings-dialog" aria-label="Settings">
+    <div class="dlg-head">
+      <h2>Settings</h2>
+      <button class="icon-btn dlg-x" id="settings-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <nav class="dlg-tabs" role="tablist">
+      <button class="dlg-tab active" type="button" role="tab" data-tab="appearance">Appearance</button>
+      <button class="dlg-tab" type="button" role="tab" data-tab="general">General</button>
+      <button class="dlg-tab" type="button" role="tab" data-tab="data">Data</button>
+    </nav>
+    <div class="dlg-body">
+      <section class="dlg-panel active" id="tab-appearance" role="tabpanel">
+        <label class="field-label" for="theme-select">Theme</label>
+        <select id="theme-select" class="theme-picker">
+          <option value="neon">Neon — dark terminal</option>
+          <option value="classic">Classic — blue</option>
+          <option value="github">GitHub — dark</option>
+          <option value="light">Light</option>
+        </select>
+        <p class="hint">Your choice is remembered on this browser.</p>
+      </section>
+      <section class="dlg-panel" id="tab-general" role="tabpanel" hidden>
+        <label class="field-label">Reset</label>
+        <button class="btn-secondary" id="reset-all" type="button">Clear all results &amp; reset</button>
+        <p class="hint">Clears every tool's results and returns to the default page.</p>
+      </section>
+      <section class="dlg-panel" id="tab-data" role="tabpanel" hidden>
+        <label class="field-label">Availability monitors</label>
+        <div class="btn-row">
+          <button class="btn-secondary" id="export-monitors" type="button">Export monitors</button>
+          <button class="btn-secondary" id="import-monitors" type="button">Import monitors</button>
+          <input type="file" id="import-file" accept="application/json,.json" hidden>
+        </div>
+        <p class="hint">Export downloads all monitors as JSON. Import adds monitors from a
+          previously exported file (existing ones are kept).</p>
+        <div id="import-result" class="hint" hidden></div>
+      </section>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn-secondary" id="settings-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <!-- Repo Audit: detail for a single finding (CVE / IaC misconfiguration). -->
+  <dialog class="finding-dialog" id="finding-dialog" aria-labelledby="finding-title">
+    <div class="dlg-head">
+      <h2 id="finding-title">Finding</h2>
+      <button class="icon-btn dlg-x" id="finding-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body" id="finding-body"></div>
+    <div class="dlg-foot">
+      <button class="btn-secondary" id="finding-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <!-- Subdomains: is-this-host-live probe (DNS · ICMP · HTTPS · HTTP). -->
+  <dialog class="finding-dialog live-dialog" id="live-dialog" aria-labelledby="live-title">
+    <div class="dlg-head">
+      <h2 id="live-title">Liveness</h2>
+      <button class="icon-btn dlg-x" id="live-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body" id="live-body"></div>
+    <div class="dlg-foot">
+      <button class="btn-secondary" id="live-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <!-- Saved subnet scan: free-text note for one IP within one saved scan. -->
+  <dialog class="finding-dialog note-dialog" id="note-dialog" aria-labelledby="note-title">
+    <div class="dlg-head">
+      <h2 id="note-title">Note</h2>
+      <button class="icon-btn dlg-x" id="note-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <p class="hint" id="note-sub"></p>
+      <textarea class="mon-input note-text" id="note-text" rows="9" spellcheck="true"
+                placeholder="What is this machine? Owner, purpose, anything worth remembering."
+                aria-label="Note"></textarea>
+    </div>
+    <div class="dlg-foot">
+      <span class="console-note" id="note-meta"></span>
+      <button class="btn-secondary" id="note-cancel" type="button">Cancel</button>
+      <button class="btn-primary" id="note-save" type="button">Save note</button>
+    </div>
+  </dialog>
+
+  <!-- Save the current subnet result as a re-openable scan. -->
+  <dialog class="finding-dialog savescan-dialog" id="savescan-dialog" aria-labelledby="savescan-title">
+    <div class="dlg-head">
+      <h2 id="savescan-title">Save scan</h2>
+      <button class="icon-btn dlg-x" id="savescan-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <form id="savescan-form">
+        <label class="field-label" for="savescan-name">Name</label>
+        <input class="mon-input" type="text" id="savescan-name" autocomplete="off"
+               maxlength="80" placeholder="Home LAN" required>
+        <p class="hint" id="savescan-sub"></p>
+      </form>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn-secondary" id="savescan-cancel" type="button">Cancel</button>
+      <button class="btn-primary" id="savescan-save" type="button">Save</button>
+    </div>
+  </dialog>
+
+  <!-- Console: run one of a fixed set of read-only network tools against a host.
+       Not a shell — the tool list and every flag come from the server. -->
+  <dialog class="finding-dialog console-dialog" id="console-dialog" aria-labelledby="console-title">
+    <div class="dlg-head">
+      <h2 id="console-title">Console</h2>
+      <button class="icon-btn dlg-x" id="console-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <form id="console-form" class="console-bar">
+        <select class="mon-input" id="console-tool" aria-label="Tool"></select>
+        <select class="mon-input" id="console-rtype" aria-label="DNS record type" hidden></select>
+        <input class="mon-input" type="text" id="console-target" autocomplete="off"
+               spellcheck="false" placeholder="example.com or 192.168.1.1" required
+               aria-label="Target host or IP">
+        <button type="submit" class="btn-primary" id="console-run">Run</button>
+      </form>
+      <p class="hint" id="console-hint"></p>
+      <pre class="console-out" id="console-out" tabindex="0" aria-live="polite"></pre>
+    </div>
+    <div class="dlg-foot">
+      <span class="console-note">Fixed tool list · flags are set server-side · target only</span>
+      <button class="btn-secondary" id="console-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <script>
+  // ── Theme switching ──────────────────────────────────────────────────────
+  // The <head> applies the saved theme before paint; here we keep the picker in
+  // sync and persist changes.
+  const THEME_KEY = 'secanalysis-theme';
+  const THEMES = ['neon', 'classic', 'github', 'light'];
+  function currentTheme() {
+    const t = localStorage.getItem(THEME_KEY);
+    return THEMES.includes(t) ? t : 'neon';
+  }
+  function applyTheme(t) {
+    if (!THEMES.includes(t)) t = 'neon';
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+    const sel = document.getElementById('theme-select');
+    if (sel) sel.value = t;
+  }
+  applyTheme(currentTheme());
+  document.getElementById('theme-select')
+    .addEventListener('change', e => applyTheme(e.target.value));
+
+  // ── Help dialog ──────────────────────────────────────────────────────────
+  // Each function's ? button names a <template id="help-…">; its content is
+  // cloned in on open. Delegated from the document because the buttons sit in
+  // several different panes, and the templates carry their own dialog title so
+  // adding a function's help is markup-only.
+  const helpDialog = document.getElementById('help-dialog');
+  const helpBody = document.getElementById('help-body');
+  const helpTitle = document.getElementById('help-title');
+
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.help-btn');
+    if (!btn) return;
+    const tpl = document.getElementById('help-' + btn.dataset.help);
+    if (!tpl) return;
+    helpTitle.textContent = tpl.dataset.title || 'Help';
+    helpBody.replaceChildren(tpl.content.cloneNode(true));
+    helpBody.scrollTop = 0;
+    helpDialog.showModal();
+  });
+  document.getElementById('help-close').addEventListener('click', () => helpDialog.close());
+  document.getElementById('help-cancel').addEventListener('click', () => helpDialog.close());
+
+  // ── Settings dialog ──────────────────────────────────────────────────────
+  // Native <dialog>: Esc fires 'cancel' and closes; a backdrop click does not
+  // close it (by design), so only Esc / Close dismiss the dialog. Its size is
+  // fixed in CSS, so switching tabs never resizes it.
+  const settingsDialog = document.getElementById('settings-dialog');
+  document.getElementById('settings-btn')
+    .addEventListener('click', () => settingsDialog.showModal());
+  document.getElementById('settings-close')
+    .addEventListener('click', () => settingsDialog.close());
+  document.getElementById('settings-cancel')
+    .addEventListener('click', () => settingsDialog.close());
+
+  document.querySelectorAll('.dlg-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.dlg-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.dlg-panel').forEach(p => { p.classList.remove('active'); p.hidden = true; });
+      tab.classList.add('active');
+      const panel = document.getElementById('tab-' + tab.dataset.tab);
+      panel.classList.add('active');
+      panel.hidden = false;
+    });
+  });
+
+  // ── Settings > Data: export / import monitors ────────────────────────────
+  document.getElementById('export-monitors').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = '/api/export';
+    a.download = 'secanalysis-monitors.json';
+    a.click();
+  });
+  const importFile = document.getElementById('import-file');
+  const importResult = document.getElementById('import-result');
+  document.getElementById('import-monitors').addEventListener('click', () => importFile.click());
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files[0];
+    if (!file) return;
+    importResult.hidden = false;
+    importResult.textContent = 'Importing…';
+    try {
+      const payload = JSON.parse(await file.text());
+      const res = await fetch('/api/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (!res.ok) { importResult.textContent = '✗ ' + (data.error || 'Import failed.'); }
+      else {
+        importResult.textContent = `Added ${data.added}, skipped ${data.skipped}.`
+          + (data.errors && data.errors.length ? ' ' + data.errors.join('; ') : '');
+        if (typeof refreshDashboard === 'function') refreshDashboard();
+      }
+    } catch (err) { importResult.textContent = '✗ Not a valid JSON file.'; }
+    importFile.value = '';
+  });
+
+  // ── Reset to default ─────────────────────────────────────────────────────
+  // Wipes every tool's results/status, resets forms, re-enables buttons, and
+  // returns to the default (Network Scan) view. Shared by the top-bar refresh
+  // button and the "Clear all results" option in Settings.
+  function resetToDefault() {
+    document.querySelectorAll('form').forEach(f => f.reset());
+    document.querySelectorAll('[id$="-results"]').forEach(el => { el.innerHTML = ''; });
+    document.querySelectorAll('.status').forEach(s => {
+      s.hidden = true; s.innerHTML = ''; s.className = 'status';
+    });
+    document.querySelectorAll('.btn-primary').forEach(b => { b.disabled = false; });
+    // Reset wipes every results pane, so no saved scan is open any more —
+    // otherwise its sidebar entry would light up again over an empty view.
+    if (typeof closeSavedScans === 'function') closeSavedScans();
+    activateView('netscan');
+  }
+  document.getElementById('reset-btn').addEventListener('click', resetToDefault);
+  document.getElementById('reset-all').addEventListener('click', () => {
+    resetToDefault();
+    settingsDialog.close();
+  });
+
+  // ── helpers ────────────────────────────────────────────────────────────
+  function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function statusClass(code) {
+    if (!code) return 'status-unknown';
+    if (code < 300) return 'status-2xx';
+    if (code < 400) return 'status-3xx';
+    if (code < 500) return 'status-4xx';
+    return 'status-5xx';
+  }
+  function expiryClass(days) {
+    if (days < 0)  return 'expiry-expired';
+    if (days <= 14) return 'expiry-danger';
+    if (days <= 30) return 'expiry-warning';
+    return 'expiry-ok';
+  }
+
+  // ── Create Report ─────────────────────────────────────────────────────────
+  // Serialises a tool's rendered results into a standalone, self-contained HTML
+  // document (the app's own stylesheet is inlined, current theme carried over),
+  // then prompts for a save location via the File System Access API. Open the
+  // saved file anywhere; Print → Save as PDF for a PDF.
+  const TOOL_META = {
+    netscan:    { name: 'Network Scan',   resultsId: 'scan-results',       targetId: 'target' },
+    subnet:     { name: 'Subnet Scan',    resultsId: 'subnet-results',     targetId: 'subnet-cidr' },
+    url:        { name: 'URL Analyzer',   resultsId: 'url-results',        targetId: 'url' },
+    exposure:   { name: 'Exposure Probe', resultsId: 'exp-results',        targetId: 'exp-url' },
+    repo:       { name: 'Repo Audit',     resultsId: 'repo-results',       targetId: 'repo-url' },
+    subdomains: { name: 'Subdomains',     resultsId: 'subdomains-results', targetId: 'subdomains-domain' },
+  };
+  // `extra` lets a tool add its own action alongside the shared two (Subnet Scan
+  // uses it for "Save scan"). buildReportDoc strips .report-actions entirely, so
+  // anything added here stays out of generated reports.
+  function reportBar(tool, extra) {
+    return `<div class="report-actions">`
+      + `<button type="button" class="btn-secondary report-btn" data-tool="${tool}">Create report</button>`
+      + `<button type="button" class="btn-secondary history-add-btn" data-tool="${tool}">Add to history</button>`
+      + (extra || '')
+      + `</div>`;
+  }
+  // Serialise a tool's current results into a standalone report document.
+  // Returns { doc, filename } or null when there's nothing to report. Shared by
+  // "Create report" (save to disk) and "Add to history" (save on the server).
+  async function buildReportDoc(tool) {
+    const meta = TOOL_META[tool];
+    const node = document.getElementById(meta.resultsId);
+    if (!node || !node.innerHTML.trim()) return null;
+    const clone = node.cloneNode(true);
+    // Strip interactive/app-only chrome; a report is static and complete.
+    // Link-style buttons (finding IDs) become plain text so the ID still shows.
+    clone.querySelectorAll('.link-btn').forEach(b => b.replaceWith(document.createTextNode(b.textContent)));
+    clone.querySelectorAll('.report-actions, .sev-filter, .row-actions, button').forEach(el => el.remove());
+    if (tool === 'repo') {
+      // Repo report reflects the current severity selection: drop filtered-out
+      // rows and re-count each section's badge to the rows that remain.
+      clone.querySelectorAll('.result-section').forEach(sec => {
+        const sevRows = sec.querySelectorAll('tr[data-sev]');
+        if (!sevRows.length) return;                    // section without severities
+        let visible = 0;
+        sevRows.forEach(tr => {
+          if (tr.style.display === 'none') tr.remove();
+          else { tr.style.display = ''; visible++; }
+        });
+        const badge = sec.querySelector('.badge');
+        if (badge) badge.textContent = String(visible);
+      });
+    } else {
+      clone.querySelectorAll('tr[style]').forEach(tr => { tr.style.display = ''; });   // show all rows
+    }
+
+    let css = '';
+    try { css = await (await fetch('/static/style.css')).text(); } catch (e) {}
+    const theme = document.documentElement.getAttribute('data-theme') || 'neon';
+    const version = (document.querySelector('.app-version')?.textContent || '').trim();
+    const target = (document.getElementById(meta.targetId)?.value || '').trim();
+    const when = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+    const doc = `<!DOCTYPE html><html lang="en" data-theme="${theme}"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecAnalysis Report — ${esc(meta.name)}</title>
+<style>${css}
+body{height:auto;overflow:auto;padding:28px;}
+.report-head{max-width:900px;margin:0 auto 22px;}
+.report-head h1{font-family:var(--font-head);color:var(--accent-strong);font-size:1.4rem;margin-bottom:10px;}
+.report-head .meta{display:flex;flex-wrap:wrap;gap:6px 22px;color:var(--text-muted);font-size:.85rem;}
+.report-body{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:18px;}
+/* On screen a note is clipped to one line; a report has no tooltip to fall back
+   on, so let it wrap and show in full. */
+.note-cell{white-space:normal;overflow:visible;max-width:none;overflow-wrap:anywhere;}
+@media print{body{padding:0;}}
+</style></head><body>
+<div class="report-head"><h1>SecAnalysis — ${esc(meta.name)}</h1>
+<div class="meta"><span><strong>Target:</strong> ${esc(target || '—')}</span>
+<span><strong>Generated:</strong> ${esc(when)}</span>
+<span><strong>Version:</strong> ${esc(version)}</span></div></div>
+<div class="report-body">${clone.innerHTML}</div>
+</body></html>`;
+    const slug = (target || meta.name).replace(/[^a-z0-9.-]+/gi, '-').toLowerCase().replace(/^-+|-+$/g, '') || 'report';
+    const filename = `secanalysis-${tool}-${slug}-${new Date().toISOString().slice(0, 10)}.html`;
+    return { doc, filename };
+  }
+
+  // Save a report to a user-chosen location via the File System Access API.
+  // Per the chosen behaviour this always prompts — there is no silent download
+  // fallback — so on a browser/context without the API it explains why.
+  async function saveReport(text, suggestedName) {
+    if (!window.showSaveFilePicker) {
+      alert('Saving a report needs the File System Access API — a Chromium-based browser '
+        + 'served over https or http://localhost. It isn’t available here, so the report '
+        + 'can’t be saved to a chosen location.');
+      return;
+    }
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description: 'HTML report', accept: { 'text/html': ['.html'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([text], { type: 'text/html' }));
+      await writable.close();
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;   // user dismissed the picker
+      alert('Could not save the report: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  async function createReport(tool) {
+    const built = await buildReportDoc(tool);
+    if (!built) return;
+    await saveReport(built.doc, built.filename);
+  }
+
+  // Persist the current report on the server (History folder, per tool).
+  async function addToHistory(tool, btn) {
+    const built = await buildReportDoc(tool);
+    if (!built) return;
+    const target = (document.getElementById(TOOL_META[tool].targetId)?.value || '').trim();
+    const restore = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+      const res = await fetch('/api/history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool, target, html: built.doc }) });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || 'Save failed');
+      if (btn) { btn.textContent = 'Added ✓'; setTimeout(() => { btn.textContent = restore; btn.disabled = false; }, 1500); }
+    } catch (e) {
+      if (btn) { btn.textContent = restore; btn.disabled = false; }
+      alert('Could not add to history: ' + e.message);
+    }
+  }
+
+  document.querySelector('.main').addEventListener('click', e => {
+    const rb = e.target.closest('.report-btn');
+    if (rb) { createReport(rb.dataset.tool); return; }
+    const hb = e.target.closest('.history-add-btn');
+    if (hb) { addToHistory(hb.dataset.tool, hb); }
+  });
+
+  // ── Repo Audit severity filter ────────────────────────────────────────────
+  const SEVERITIES = ['critical', 'high', 'medium', 'low', 'informational'];
+  function sevKey(sev) {
+    const s = String(sev || '').toLowerCase();
+    return ['critical', 'high', 'medium', 'low'].includes(s) ? s : 'informational';
+  }
+  function repoFilterBar() {
+    return `<div class="card sev-filter"><span class="sev-filter-label">Show severity</span>`
+      + SEVERITIES.map(s =>
+          `<label class="sev-chip sev-${s}"><input type="checkbox" data-sev-filter="${s}" checked>${s}</label>`
+        ).join('') + `</div>`;
+  }
+  function applyRepoFilter() {
+    const on = new Set([...document.querySelectorAll('[data-sev-filter]:checked')].map(c => c.dataset.sevFilter));
+    document.querySelectorAll('#repo-results tr[data-sev]').forEach(tr => {
+      tr.style.display = on.has(tr.dataset.sev) ? '' : 'none';
+    });
+  }
+
+  // ── Menu / view switching ─────────────────────────────────────────────
+  const SUBTITLES = { netscan: 'Local Network Scanner', subnet: 'Subnet Host Discovery',
+                      url: 'URL Security Analyzer',
+                      exposure: 'Staging Exposure Probe', repo: 'Repository Security Audit',
+                      subdomains: 'Subdomain Discovery', dashboard: 'Availability Dashboard',
+                      history: 'Saved Reports' };
+  let currentView = 'netscan';
+  function activateView(view) {
+    currentView = view;
+    document.querySelectorAll('.menu-item').forEach(b =>
+      b.classList.toggle('active', b.dataset.view === view));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById('view-' + view).classList.add('active');
+    document.getElementById('header-subtitle').textContent = SUBTITLES[view];
+    if (typeof setDashboardActive === 'function') setDashboardActive(view === 'dashboard');
+    if (view === 'history' && typeof loadHistory === 'function') loadHistory();
+    // A saved scan is only "the thing you're looking at" while its view is up,
+    // so the sidebar highlight follows the active view, not just what's open.
+    if (typeof refreshSavedMenus === 'function') refreshSavedMenus();
+  }
+  document.querySelectorAll('.menu-item').forEach(btn => {
+    btn.addEventListener('click', () => activateView(btn.dataset.view));
+  });
+
+  // ── Output pane idle placeholder ─────────────────────────────────────────
+  // Shown while a pane holds no status and no results; hidden as soon as either
+  // appears. Watching the pane keeps this independent of the render functions.
+  document.querySelectorAll('.pane-output').forEach(pane => {
+    const empty = pane.querySelector('.pane-empty');
+    if (!empty) return;
+    const sync = () => {
+      const busy = !!pane.querySelector('.card, .status:not([hidden])');
+      // Only write when the value actually changes: assigning `hidden` always
+      // writes the attribute, which would re-trigger this observer forever.
+      if (empty.hidden !== busy) empty.hidden = busy;
+    };
+    new MutationObserver(sync).observe(pane, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'],
+    });
+    sync();
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Network Scan
+  // ══════════════════════════════════════════════════════════════════════
+  const scanForm = document.getElementById('scan-form');
+  const scanBtn = document.getElementById('scan-btn');
+  const scanStatus = document.getElementById('scan-status');
+  const scanResults = document.getElementById('scan-results');
+
+  scanForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const target = document.getElementById('target').value.trim();
+    if (!target) return;
+    const opts = {
+      target,
+      ports:     scanForm.querySelector('input[name="ports"]:checked').value,
+      sV:        scanForm.sV.checked,
+      os:        scanForm.os.checked,
+      scripts:   scanForm.scripts.checked,
+      skip_ping: scanForm.skip_ping.checked,
+    };
+    scanBtn.disabled = true;
+    scanResults.innerHTML = '';
+    scanStatus.hidden = false;
+    scanStatus.className = 'status status--busy';
+    scanStatus.innerHTML = `<span class="spinner"></span> Scanning <code>${esc(target)}</code>…
+      this can take a while for large port ranges.`;
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts) });
+      const data = await res.json();
+      if (!res.ok) { showScanError(data); return; }
+      renderScan(data);
+    } catch (err) { showScanError({ error: 'Network error: ' + err.message }); }
+    finally { scanBtn.disabled = false; }
+  });
+
+  function showScanError(data) {
+    scanStatus.className = 'status status--error';
+    scanStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Scan failed.')}</strong>` +
+      (data.command ? `<div class="cmd">${esc(data.command)}</div>` : '');
+  }
+
+  function renderScan(data) {
+    scanStatus.hidden = true;
+    const { dns, result, command, stderr } = data;
+    let html = `<div class="card result-section">
+      <h3>Resolution</h3>
+      <div class="info-grid">
+        <div class="info-item"><strong>Input</strong><span class="mono">${esc(dns.input)}</span></div>
+        <div class="info-item"><strong>IP address</strong><span class="mono">${esc(dns.ip) || '—'}</span></div>
+        <div class="info-item"><strong>Hostname (PTR)</strong><span>${dns.hostname ? esc(dns.hostname) : '<span class="muted">no reverse DNS</span>'}</span></div>
+        ${dns.aliases && dns.aliases.length ? `<div class="info-item"><strong>Aliases</strong><span>${dns.aliases.map(esc).join(', ')}</span></div>` : ''}
+      </div></div>`;
+
+    const stateClass = result.state === 'up' ? 'badge-up' : 'badge-down';
+    html += `<div class="card result-section">
+      <h3>Host <span class="badge ${stateClass}">${esc(result.state || 'unknown')}</span></h3>`;
+    const openish = result.ports.filter(p => p.state !== 'closed');
+    if (openish.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Port</th><th>State</th><th>Service</th><th>Version / detail</th></tr></thead><tbody>`;
+      for (const p of openish) {
+        const sc = p.state === 'open' ? 'st-open' : p.state === 'filtered' ? 'st-filtered' : 'st-other';
+        html += `<tr><td class="mono">${p.port}/${esc(p.protocol)}</td>
+          <td><span class="state ${sc}">${esc(p.state)}</span></td>
+          <td>${esc(p.service) || '<span class="muted">—</span>'}</td>
+          <td>${esc(p.detail) || '<span class="muted">—</span>'}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    } else {
+      html += `<p class="muted">No open ports found in the scanned range.</p>`;
+    }
+    if (result.os && result.os.length) {
+      html += `<h4 class="sub">OS guesses</h4><ul class="os-list">`;
+      for (const o of result.os) html += `<li><span class="acc">${o.accuracy}%</span> ${esc(o.name)}</li>`;
+      html += `</ul>`;
+    }
+    html += `</div>`;
+    html += `<details class="card raw"><summary>nmap command${stderr ? ' &amp; notes' : ''}</summary>
+      <div class="cmd">${esc(command)}</div>
+      ${stderr ? `<pre class="stderr">${esc(stderr)}</pre>` : ''}</details>`;
+    scanResults.innerHTML = reportBar('netscan') + html;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Subnet Scan — discover live hosts, then hand an IP to Network Scan
+  // ══════════════════════════════════════════════════════════════════════
+  const subnetForm = document.getElementById('subnet-form');
+  const subnetBtn = document.getElementById('subnet-btn');
+  const subnetStatus = document.getElementById('subnet-status');
+  const subnetResults = document.getElementById('subnet-results');
+
+  subnetForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const subnet = document.getElementById('subnet-cidr').value.trim();
+    if (!subnet) return;
+    subnetBtn.disabled = true;
+    subnetResults.innerHTML = '';
+    subnetStatus.hidden = false;
+    subnetStatus.className = 'status status--busy';
+    subnetStatus.innerHTML = `<span class="spinner"></span> Sweeping <code>${esc(subnet)}</code>
+      for live hosts… a large subnet can take a while.`;
+    try {
+      const res = await fetch('/api/subnet', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subnet }) });
+      const data = await res.json();
+      if (!res.ok || data.error) { showSubnetError(data); return; }
+      subnetSaved.showLive(data);
+    } catch (err) { showSubnetError({ error: 'Network error: ' + err.message }); }
+    finally { subnetBtn.disabled = false; }
+  });
+
+  function showSubnetError(data) {
+    subnetStatus.hidden = false;
+    subnetStatus.className = 'status status--error';
+    subnetStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Subnet scan failed.')}</strong>`
+      + (data.command ? `<div class="cmd">${esc(data.command)}</div>` : '');
+  }
+
+  // `ctx` is null for a live sweep, or the saved scan's record when replaying a
+  // stored one. Because a saved scan holds the same JSON /api/subnet returns,
+  // both paths render through here — saved mode just adds the scan bar, a notes
+  // column and new/gone badges. Live mode is unchanged.
+  function renderSubnet(data, ctx) {
+    subnetStatus.hidden = true;
+    const { subnet, hosts, command, stderr } = data;
+    const notes = (ctx && ctx.notes) || {};
+    const newIps = new Set((ctx && ctx.newKeys) || []);
+    // Hosts that answered last time but not now are shown greyed rather than
+    // dropped, so a machine that went offline stays visible with its note.
+    const rows = hosts.map(h => ({ h, gone: false }))
+      .concat(((ctx && ctx.goneItems) || []).map(h => ({ h, gone: true })));
+
+    let html = ctx ? subnetSaved.bar(ctx) : '';
+    html += `<div class="card result-section">
+      <h3>Live hosts <span class="port-range">${hosts.length} up in ${esc(subnet)}</span></h3>`;
+    if (rows.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>IP address</th><th>Hostname (PTR)</th><th>MAC / vendor</th>`
+        + (ctx ? `<th>Note</th>` : '') + `<th></th></tr></thead><tbody>`;
+      for (const { h, gone } of rows) {
+        const ip = h.ip || '';
+        const macCell = h.mac
+          ? `${esc(h.mac)}${h.vendor ? `<div class="muted small">${esc(h.vendor)}</div>` : ''}`
+          : '<span class="muted">—</span>';
+        let actions = '';
+        if (ip) {
+          actions = `<span class="row-actions">`
+            + `<button type="button" class="row-btn" data-copy="${esc(ip)}" title="Copy IP" aria-label="Copy IP">${SUB_ICON.copy}</button>`
+            + `<button type="button" class="row-btn" data-scan-ip="${esc(ip)}" title="Scan ${esc(ip)} in Network Scan" aria-label="Scan this IP in Network Scan">${SUB_ICON.scan}</button>`
+            + (ctx ? subnetSaved.noteBtn(ip, !!notes[ip]) : '')
+            + `</span>`;
+        }
+        const badge = gone ? `<span class="host-badge gone">gone</span>`
+          : (ip && newIps.has(ip)) ? `<span class="host-badge new">new</span>` : '';
+        // Truncated to one line in CSS, so carry the full text as a tooltip.
+        const noteCell = ctx
+          ? `<td class="note-cell"${notes[ip] ? ` title="${esc(notes[ip].note)}"` : ''}>`
+            + `${notes[ip] ? esc(notes[ip].note) : '<span class="muted">—</span>'}</td>`
+          : '';
+        html += `<tr${gone ? ' class="row-gone"' : ''}>
+          <td class="mono">${esc(ip) || '<span class="muted">—</span>'}${badge}</td>
+          <td>${h.hostname ? esc(h.hostname) : '<span class="muted">—</span>'}</td>
+          <td class="mono small">${macCell}</td>
+          ${noteCell}
+          <td>${actions}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    } else {
+      html += `<p class="muted">No hosts answered in <code>${esc(subnet)}</code>. Some machines
+        block ping/ARP — you can still scan a specific IP directly in Network Scan.</p>`;
+    }
+    html += `<details class="card raw"><summary>nmap command${stderr ? ' &amp; notes' : ''}</summary>
+      <div class="cmd">${esc(command)}</div>
+      ${stderr ? `<pre class="stderr">${esc(stderr)}</pre>` : ''}</details>`;
+    subnetResults.innerHTML = reportBar('subnet', ctx ? '' : subnetSaved.saveBtn()) + html;
+  }
+
+  // Delegated row actions: copy an IP, or hand it to Network Scan (prefillNetscan
+  // and copyText are shared with the Subdomains tool, defined further down). The
+  // saved-scan actions (notes, refresh, …) have their own listener in the shared
+  // saved-scans module.
+  subnetResults.addEventListener('click', e => {
+    const copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) { copyText(copyBtn.dataset.copy, copyBtn); return; }
+    const scanIpBtn = e.target.closest('[data-scan-ip]');
+    if (scanIpBtn) { prefillNetscan(scanIpBtn.dataset.scanIp); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Saved scans (shared by Subnet Scan and Subdomains)
+  // ══════════════════════════════════════════════════════════════════════
+  // Report history stores finished HTML; a saved scan stores the tool's own JSON
+  // payload instead, which is why reopening one gives back a working view rather
+  // than a frozen page. Refreshing re-runs the tool against the same target under
+  // the same id, so notes (keyed on scan id + item) survive it.
+  //
+  // One engine serves every tool that opts in. A tool supplies its chrome's ids
+  // and a render function; saving, reopening, refreshing, notes and collapsing
+  // are identical for all of them. The note and save dialogs are shared
+  // singletons, so `activeSaved` tracks which tool's module opened one.
+  let activeSaved = null;
+
+  function makeSavedScans(cfg) {
+    const submenu = document.getElementById(cfg.submenuId);
+    const toggle = document.getElementById(cfg.toggleId);
+    const resultsEl = document.getElementById(cfg.resultsId);
+    const statusEl = document.getElementById(cfg.statusId);
+    const COLLAPSE_KEY = `secanalysis-${cfg.tool}-collapsed`;
+    let scans = [];   // this tool's saved scans, for the sidebar
+    let open = null;  // the saved scan on screen, or null when showing a live run
+    let last = null;  // last live result, so "Save scan" needs no re-run
+
+    function busy(html) {
+      statusEl.hidden = false;
+      statusEl.className = 'status status--busy';
+      statusEl.innerHTML = `<span class="spinner"></span> ${html}`;
+    }
+    function fail(d) {
+      statusEl.hidden = false;
+      statusEl.className = 'status status--error';
+      statusEl.innerHTML = `<strong>✗ ${esc((d && d.error) || 'Something went wrong.')}</strong>`;
+    }
+
+    async function load() {
+      try {
+        const res = await fetch(`/api/saved-scans?tool=${encodeURIComponent(cfg.tool)}`);
+        const d = await res.json();
+        scans = d.scans || [];
+      } catch (e) { scans = []; }
+      renderMenu();
+    }
+
+    function renderMenu() {
+      // A saved scan counts as selected only while its own view is on screen.
+      const showActive = currentView === cfg.view && open;
+      submenu.innerHTML = scans.map(s =>
+        `<button type="button" class="submenu-item${showActive && open.id === s.id ? ' active' : ''}"
+                 data-scan-id="${s.id}">
+           <span class="menu-text"><strong>${esc(s.name)}</strong>
+             <em>${esc(s.target)} · ${s.itemCount} ${esc(cfg.unit)}</em></span>
+         </button>`).join('');
+      toggle.hidden = scans.length === 0;   // nothing to collapse
+    }
+
+    // The header a saved scan renders above its table. Tool renderers call this.
+    function bar(ctx) {
+      const refreshed = ctx.lastRefreshed ? `refreshed ${fmtWhen(ctx.lastRefreshed)}`
+                                          : 'never refreshed';
+      const nNew = (ctx.newKeys || []).length, nGone = (ctx.goneItems || []).length;
+      const diff = (nNew || nGone)
+        ? `<span class="saved-diff">${nNew} new · ${nGone} gone since the previous run</span>` : '';
+      return `<div class="card saved-bar">
+        <div class="saved-bar-head">
+          <h3>${esc(ctx.name)} <span class="port-range">${esc(ctx.target)}</span></h3>
+          <span class="muted small">Saved ${fmtWhen(ctx.createdAt)} · ${refreshed}</span>
+          ${diff}
+        </div>
+        <div class="saved-bar-actions">
+          <button type="button" class="btn-primary scan-refresh-btn">Refresh</button>
+          <button type="button" class="btn-secondary scan-rename-btn">Rename</button>
+          <button type="button" class="btn-secondary scan-delete-btn">Delete</button>
+        </div>
+      </div>`;
+    }
+
+    // Buttons are addressed by class, not id: both tools' panes live in the DOM
+    // at once, so ids would collide.
+    const saveBtn = () =>
+      `<button type="button" class="btn-secondary savescan-btn">Save scan</button>`;
+
+    const noteBtn = (key, has) =>
+      `<button type="button" class="row-btn${has ? ' has-note' : ''}" data-note-key="${esc(key)}"`
+      + ` title="${has ? 'Edit' : 'Add'} note for ${esc(key)}"`
+      + ` aria-label="${has ? 'Edit' : 'Add'} note for ${esc(key)}">${SUB_ICON.note}</button>`;
+
+    function showLive(data) {
+      open = null;
+      last = data;
+      cfg.render(data, null);
+      renderMenu();
+    }
+
+    // Keep the target box in step with what's on screen, so a plain re-run and
+    // the report header both refer to the scan you're actually looking at.
+    function showSaved(d) {
+      open = d;
+      const input = document.getElementById(cfg.targetInputId);
+      if (input) input.value = d.target;
+      cfg.render(d.data, d);
+      renderMenu();
+    }
+
+    async function openById(id) {
+      activateView(cfg.view);
+      resultsEl.innerHTML = '';
+      busy('Loading saved scan…');
+      try {
+        const res = await fetch(`/api/saved-scans/${id}`);
+        const d = await res.json();
+        if (!res.ok || d.error) { fail(d); await load(); return; }
+        showSaved(d);
+      } catch (e) { fail({ error: e.message }); }
+    }
+
+    async function refresh() {
+      if (!open) return;
+      const id = open.id;
+      const btn = resultsEl.querySelector('.scan-refresh-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Running…'; }
+      busy(cfg.refreshMsg(open.target));
+      try {
+        const res = await fetch(`/api/saved-scans/${id}/refresh`, { method: 'POST' });
+        const d = await res.json();
+        if (!res.ok || d.error) { fail(d); return; }
+        showSaved(d);
+        await load();
+      } catch (e) {
+        fail({ error: e.message });
+      } finally {
+        // On success showSaved has replaced this button; restoring the detached
+        // node is then a harmless no-op.
+        if (btn) { btn.disabled = false; btn.textContent = 'Refresh'; }
+      }
+    }
+
+    async function remove() {
+      if (!open) return;
+      if (!confirm(`Delete the saved scan “${open.name}” and its notes? This cannot be undone.`)) return;
+      try {
+        const res = await fetch(`/api/saved-scans/${open.id}`, { method: 'DELETE' });
+        if (!res.ok) { alert('Could not delete the saved scan.'); return; }
+        open = null;
+        resultsEl.innerHTML = '';
+        await load();
+      } catch (e) { alert('Could not delete the saved scan: ' + e.message); }
+    }
+
+    // Throws on failure; the dialog wiring below turns that into an alert.
+    async function submitSave(name, mode) {
+      const renaming = mode === 'rename';
+      const id = renaming ? open.id : null;
+      const res = renaming
+        ? await fetch(`/api/saved-scans/${id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }) })
+        : await fetch('/api/saved-scans', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tool: cfg.tool, name, data: last }) });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || 'Could not save the scan.');
+      await load();
+      await openById(renaming ? id : d.id);
+    }
+
+    async function saveNote(key, text) {
+      const res = await fetch(
+        `/api/saved-scans/${open.id}/notes/${encodeURIComponent(key)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: text }) });
+      const d = await res.json();
+      if (!res.ok || d.error) throw new Error(d.error || 'Could not save the note.');
+      // Patch the open scan in place; an empty note means the row has none.
+      if (!open.notes) open.notes = {};
+      if (d.note) open.notes[key] = { note: d.note, updatedAt: d.updatedAt };
+      else delete open.notes[key];
+      cfg.render(open.data, open);
+    }
+
+    // Collapsed state is remembered per browser: with a lot of saved scans the
+    // sidebar gets long, and re-collapsing on every reload would be tedious.
+    function applyCollapse(collapsed) {
+      submenu.classList.toggle('collapsed', collapsed);
+      toggle.classList.toggle('collapsed', collapsed);
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      const label = collapsed ? 'Expand saved scans' : 'Collapse saved scans';
+      toggle.setAttribute('aria-label', label);
+      toggle.title = label;
+      try { localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) {}
+    }
+    toggle.addEventListener('click', () =>
+      applyCollapse(!submenu.classList.contains('collapsed')));
+
+    submenu.addEventListener('click', e => {
+      const b = e.target.closest('[data-scan-id]');
+      if (b) openById(Number(b.dataset.scanId));
+    });
+
+    // Scan-level and note actions for this tool's results pane. The tools keep
+    // their own listeners for their own row actions (copy, scan this IP, …).
+    resultsEl.addEventListener('click', e => {
+      const nb = e.target.closest('[data-note-key]');
+      if (nb) { openNoteDialog(mod, nb.dataset.noteKey); return; }
+      if (e.target.closest('.savescan-btn')) { openSaveScanDialog(mod); return; }
+      if (e.target.closest('.scan-refresh-btn')) { refresh(); return; }
+      if (e.target.closest('.scan-rename-btn')) { openRenameScanDialog(mod); return; }
+      if (e.target.closest('.scan-delete-btn')) { remove(); }
+    });
+
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(COLLAPSE_KEY) === '1'; } catch (e) {}
+    applyCollapse(collapsed);
+
+    const mod = {
+      cfg, load, openById, showLive, showSaved, bar, saveBtn, noteBtn,
+      submitSave, saveNote, renderMenu,
+      get open() { return open; },
+      get last() { return last; },
+      clearOpen() { open = null; },
+    };
+    return mod;
+  }
+
+  const subnetSaved = makeSavedScans({
+    tool: 'subnet', view: 'subnet', unit: 'up',
+    submenuId: 'subnet-submenu', toggleId: 'subnet-toggle',
+    resultsId: 'subnet-results', statusId: 'subnet-status',
+    targetInputId: 'subnet-cidr',
+    render: (data, ctx) => renderSubnet(data, ctx),
+    describe: d => `${d.hosts.length} host(s) in ${d.subnet}. Saved scans can be `
+      + `reopened, refreshed and annotated per IP.`,
+    refreshMsg: t => `Re-sweeping <code>${esc(t)}</code> for live hosts… a large subnet `
+      + `can take a while.`,
+  });
+
+  const subdomainsSaved = makeSavedScans({
+    tool: 'subdomains', view: 'subdomains', unit: 'names',
+    submenuId: 'subdomains-submenu', toggleId: 'subdomains-toggle',
+    resultsId: 'subdomains-results', statusId: 'subdomains-status',
+    targetInputId: 'subdomains-domain',
+    render: (data, ctx) => renderSubdomains(data, ctx),
+    describe: d => `${d.names.length} name(s) for ${d.domain}. Saved scans can be `
+      + `reopened, refreshed and annotated per subdomain.`,
+    refreshMsg: t => `Re-checking certificate-transparency logs for <code>${esc(t)}</code>…`,
+  });
+
+  const savedMods = [subnetSaved, subdomainsSaved];
+  function refreshSavedMenus() { savedMods.forEach(m => m.renderMenu()); }
+  function closeSavedScans() { savedMods.forEach(m => m.clearOpen()); }
+
+  // ── Save / rename dialog (one dialog, two modes, either tool) ────────────
+  const savescanDialog = document.getElementById('savescan-dialog');
+  const savescanName = document.getElementById('savescan-name');
+  const savescanSub = document.getElementById('savescan-sub');
+  const savescanTitle = document.getElementById('savescan-title');
+  let savescanMode = 'save';
+
+  function openSaveScanDialog(mod) {
+    if (!mod.last) return;
+    activeSaved = mod;
+    savescanMode = 'save';
+    savescanTitle.textContent = 'Save scan';
+    savescanName.value = '';
+    savescanSub.textContent = mod.cfg.describe(mod.last);
+    savescanDialog.showModal();
+    savescanName.focus();
+  }
+
+  function openRenameScanDialog(mod) {
+    if (!mod.open) return;
+    activeSaved = mod;
+    savescanMode = 'rename';
+    savescanTitle.textContent = 'Rename scan';
+    savescanName.value = mod.open.name;
+    savescanSub.textContent = mod.open.target;
+    savescanDialog.showModal();
+    savescanName.select();
+  }
+
+  async function submitSaveScan() {
+    if (!activeSaved) return;
+    const name = savescanName.value.trim();
+    if (!name) { savescanName.focus(); return; }
+    const btn = document.getElementById('savescan-save');
+    btn.disabled = true;
+    try {
+      await activeSaved.submitSave(name, savescanMode);
+      savescanDialog.close();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('savescan-form')
+    .addEventListener('submit', e => { e.preventDefault(); submitSaveScan(); });
+  document.getElementById('savescan-save').addEventListener('click', submitSaveScan);
+  document.getElementById('savescan-close').addEventListener('click', () => savescanDialog.close());
+  document.getElementById('savescan-cancel').addEventListener('click', () => savescanDialog.close());
+
+  // ── Per-item note dialog (either tool) ──────────────────────────────────
+  const noteDialog = document.getElementById('note-dialog');
+  const noteText = document.getElementById('note-text');
+  const noteTitle = document.getElementById('note-title');
+  const noteSub = document.getElementById('note-sub');
+  const noteMeta = document.getElementById('note-meta');
+  let noteKey = null;
+
+  function openNoteDialog(mod, key) {
+    if (!mod.open) return;
+    activeSaved = mod;
+    noteKey = key;
+    const existing = (mod.open.notes || {})[key];
+    noteTitle.textContent = key;
+    noteSub.textContent = `Note for ${key} in “${mod.open.name}”. Notes belong to this saved `
+      + `scan, so the same entry in another scan keeps its own note.`;
+    noteText.value = existing ? existing.note : '';
+    noteMeta.textContent = existing ? `Last edited ${fmtWhen(existing.updatedAt)}` : '';
+    noteDialog.showModal();
+    noteText.focus();
+  }
+
+  async function saveNote() {
+    if (!activeSaved || noteKey === null) return;
+    const btn = document.getElementById('note-save');
+    btn.disabled = true;
+    try {
+      await activeSaved.saveNote(noteKey, noteText.value);
+      noteDialog.close();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById('note-save').addEventListener('click', saveNote);
+  document.getElementById('note-close').addEventListener('click', () => noteDialog.close());
+  document.getElementById('note-cancel').addEventListener('click', () => noteDialog.close());
+
+  savedMods.forEach(m => m.load());
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  URL Analyzer
+  // ══════════════════════════════════════════════════════════════════════
+  const urlForm = document.getElementById('url-form');
+  const urlBtn = document.getElementById('url-btn');
+  const urlStatus = document.getElementById('url-status');
+  const urlResults = document.getElementById('url-results');
+
+  function formatUrl(input) {
+    return /^https?:\/\//i.test(input) ? input : 'https://' + input;
+  }
+
+  urlForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const raw = document.getElementById('url').value.trim();
+    if (!raw) return;
+    const url = formatUrl(raw);
+    urlBtn.disabled = true;
+    urlResults.innerHTML = '';
+    urlStatus.hidden = false;
+    urlStatus.className = 'status status--busy';
+    urlStatus.innerHTML = `<span class="spinner"></span> Analyzing <code>${esc(url)}</code>…`;
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          portScan: urlForm.portScan.checked,
+          dnsAuth: urlForm.dnsAuth.checked,
+          username: urlForm.username.value.trim(),
+          password: urlForm.password.value,
+        }) });
+      const data = await res.json();
+      if (!res.ok) { showUrlError(data); return; }
+      renderUrl(data);
+    } catch (err) { showUrlError({ error: 'Network error: ' + err.message }); }
+    finally { urlBtn.disabled = false; }
+  });
+
+  function showUrlError(data) {
+    urlStatus.className = 'status status--error';
+    urlStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Analysis failed.')}</strong>`;
+  }
+
+  function securityHeaderRow(name, value) {
+    const found = value !== 'Not found';
+    return `<div class="kv-row"><span class="kv-name">${esc(name)}</span>
+      <span class="kv-val ${found ? 'found' : 'not-found'}">${found ? '✅ ' + esc(value) : '❌ Not found'}</span></div>`;
+  }
+
+  const GRADE_META = {
+    good: { icon: '✅', label: 'Good' },
+    warn: { icon: '⚠️', label: 'Attention' },
+    bad:  { icon: '❌', label: 'Poor' },
+    na:   { icon: '—',  label: 'N/A' },
+  };
+  const RATING_LABEL = { good: 'Good', warn: 'Needs attention', bad: 'Poor' };
+
+  function renderScorecard(sc) {
+    if (!sc || sc.score === null) return '';
+    const meta = GRADE_META[sc.rating] || GRADE_META.na;
+    let rows = '';
+    for (const c of sc.categories) {
+      const m = GRADE_META[c.grade] || GRADE_META.na;
+      rows += `<div class="score-row score-${c.grade}">
+        <span class="score-cat">${m.icon} ${esc(c.name)}</span>
+        <span class="score-detail">${esc(c.detail)}</span></div>`;
+    }
+    return `<div class="card result-section scorecard">
+      <div class="score-head">
+        <div class="score-ring score-${sc.rating}">
+          <span class="score-num">${sc.score}</span><span class="score-max">/100</span>
+        </div>
+        <div class="score-verdict">
+          <h3>Security Scorecard</h3>
+          <span class="score-badge score-${sc.rating}">${meta.icon} ${RATING_LABEL[sc.rating]}</span>
+        </div>
+      </div>
+      <div class="score-list">${rows}</div>
+      <p class="muted score-note">Weighted across the categories that applied. Categories marked N/A (e.g. DNS checks when DNS authentication is off, or mail records on a no-MX domain) are excluded from the score.</p>
+    </div>`;
+  }
+
+  function renderUrl(r) {
+    urlStatus.hidden = true;
+    let html = '';
+
+    // Scorecard (weighted verdict over everything that was checked)
+    html += renderScorecard(r.scorecard);
+
+    // Basic info
+    const rt = r.responseTimeMs;
+    const rtClass = rt == null ? '' : rt < 400 ? 'flag-ok' : rt < 1200 ? 'kv-val warn' : 'flag-bad';
+    html += `<div class="card result-section"><h3>Basic Information</h3><div class="info-grid">
+      <div class="info-item"><strong>URL</strong><span class="mono">${esc(r.url)}</span></div>
+      <div class="info-item"><strong>IP Address</strong><span class="mono">${esc(r.ipAddress)}</span></div>
+      <div class="info-item"><strong>Status Code</strong>
+        <span class="hop-status ${statusClass(r.statusCode)}">${r.statusCode || 'N/A'}</span></div>
+      <div class="info-item"><strong>Response Time</strong>
+        <span class="${rtClass}">${rt == null ? 'N/A' : rt + ' ms'}</span></div>
+      <div class="info-item"><strong>Server</strong><span>${esc(r.server)}</span></div>
+    </div></div>`;
+
+    // Open ports
+    if (r.portScan) {
+      html += `<div class="card result-section"><h3>Open Ports <span class="port-range">(scanned 1–1024)</span></h3>`;
+      if (r.portScan.length) {
+        html += `<div class="port-grid">`;
+        for (const p of r.portScan)
+          html += `<div class="port-item"><span class="port-number">${p.port}</span>
+            <span class="port-service">${esc(p.service)}</span></div>`;
+        html += `</div>`;
+      } else { html += `<p class="muted">No open ports detected in the range 1–1024.</p>`; }
+      html += `</div>`;
+    }
+
+    // Redirect chain + hygiene
+    if (r.redirectChain && r.redirectChain.length) {
+      html += `<div class="card result-section"><h3>Redirect Chain</h3>`;
+      const hr = r.httpsRedirect;
+      if (hr && hr.tested) {
+        html += `<div class="kv-row"><span class="kv-name">HTTP → HTTPS</span>
+          <span class="kv-val ${hr.upgradesToHttps ? 'found' : 'not-found'}">
+            ${hr.upgradesToHttps ? '✅ Redirects to HTTPS' : '❌ No HTTPS redirect'}${hr.finalUrl ? ` <span class="muted">(${esc(hr.finalUrl)})</span>` : ''}</span></div>`;
+      }
+      html += `<div class="redirect-chain">`;
+      r.redirectChain.forEach((hop, i) => {
+        const label = hop.error ? `⚠ ${esc(hop.error)}` : hop.statusCode;
+        html += `<div class="redirect-hop"><span class="hop-index">${i + 1}</span>
+          <span class="hop-url">${esc(hop.url)}</span>
+          <span class="hop-status ${statusClass(hop.statusCode)}">${label}</span></div>`;
+      });
+      html += `</div>`;
+      if (r.redirectIssues && r.redirectIssues.length) {
+        html += `<div class="issue-list">`;
+        for (const i of r.redirectIssues)
+          html += `<div class="issue-row issue-med">${esc(i)}</div>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // TLS cert
+    if (r.certInfo) {
+      const c = r.certInfo;
+      html += `<div class="card result-section"><h3>TLS Certificate</h3>`;
+      if (c.selfSigned)
+        html += `<div class="warning-banner">⚠️ Self-signed certificate — not trusted by browsers</div>`;
+      else if (c.chainTrusted === false)
+        html += `<div class="warning-banner">⚠️ Chain/hostname not trusted${c.trustError ? ' — ' + esc(c.trustError) : ''}</div>`;
+      if (c.weakCipher)
+        html += `<div class="warning-banner">⚠️ Weak cipher negotiated: ${esc(c.cipher)}</div>`;
+      if (c.deprecatedProtocols && c.deprecatedProtocols.length)
+        html += `<div class="warning-banner">⚠️ Deprecated protocol(s) still enabled: ${c.deprecatedProtocols.map(esc).join(', ')}</div>`;
+      const trustLabel = c.selfSigned ? '⚠️ Self-signed'
+        : c.chainTrusted === false ? '❌ Not trusted' : '✅ Trusted chain';
+      html += `<div class="info-grid">
+        <div class="info-item"><strong>Subject</strong><span>${esc(c.subject)}</span></div>
+        <div class="info-item"><strong>Issuer</strong><span>${esc(c.issuer)}</span></div>
+        <div class="info-item"><strong>Valid Until</strong>
+          <span class="expiry-badge ${expiryClass(c.daysUntilExpiry)}">${esc(c.validTo)}${c.daysUntilExpiry < 0 ? ' — EXPIRED' : ` (${c.daysUntilExpiry}d remaining)`}</span></div>
+        <div class="info-item"><strong>Valid From</strong><span>${esc(c.validFrom)}</span></div>
+        <div class="info-item"><strong>Negotiated</strong><span>${esc(c.protocol)} · ${esc(c.cipher)}</span></div>
+        <div class="info-item"><strong>Trust</strong><span>${trustLabel}</span></div>
+        <div class="info-item"><strong>Serial</strong><span class="mono">${esc(c.serialNumber)}</span></div>
+        <div class="info-item"><strong>SHA-256</strong><span class="mono small">${esc(c.fingerprint256)}</span></div>
+      </div>`;
+      if (c.protocols) {
+        html += `<div class="proto-block"><strong>Supported protocols</strong><div class="proto-tags">`;
+        for (const [name, ok] of Object.entries(c.protocols)) {
+          const dep = name === 'TLS 1.0' || name === 'TLS 1.1';
+          const cls = ok === true ? (dep ? 'proto-bad' : 'proto-ok')
+                    : ok === false ? 'proto-off' : 'proto-unknown';
+          const mark = ok === true ? '✓' : ok === false ? '✕' : '?';
+          html += `<span class="proto-tag ${cls}">${esc(name)} ${mark}</span>`;
+        }
+        html += `</div></div>`;
+      }
+      if (c.sans && c.sans.length) {
+        html += `<div class="sans-block"><strong>Subject Alternative Names (${c.sans.length})</strong><div class="sans-tags">`;
+        c.sans.slice(0, 12).forEach(s => html += `<span class="san-tag">${esc(s)}</span>`);
+        if (c.sans.length > 12) html += `<span class="san-tag more">+${c.sans.length - 12} more</span>`;
+        html += `</div></div>`;
+      }
+      html += `</div>`;
+    } else if (r.url.startsWith('http://')) {
+      html += `<div class="card result-section"><h3>TLS Certificate</h3>
+        <p class="muted">N/A — site is served over plain HTTP</p></div>`;
+    }
+
+    // DNS records
+    const d = r.dnsRecords || {};
+    const dnsRows = [];
+    if (d.A?.length)    dnsRows.push(['A', d.A.join(', ')]);
+    if (d.AAAA?.length) dnsRows.push(['AAAA', d.AAAA.join(', ')]);
+    if (d.PTR?.length)  dnsRows.push(['PTR', d.PTR.join(', ')]);
+    if (d.NS?.length)   dnsRows.push(['NS', d.NS.join(', ')]);
+    if (d.MX?.length)   dnsRows.push(['MX', d.MX.map(m => `${m.priority} ${esc(m.exchange)}`).join('<br>')]);
+    if (d.TXT?.length)  dnsRows.push(['TXT', d.TXT.map(t => `<span class="dns-txt">${esc(t)}</span>`).join('<br>')]);
+    if (d.CAA?.length)  dnsRows.push(['CAA', d.CAA.map(c => `${c.critical ? '1' : '0'} ${esc(c.tag)} "${esc(c.value)}"`).join('<br>')]);
+    if (dnsRows.length) {
+      html += `<div class="card result-section"><h3>DNS Records</h3><div class="dns-records">`;
+      for (const [type, val] of dnsRows)
+        html += `<div class="dns-row"><span class="dns-type">${type}</span><span>${val}</span></div>`;
+      html += `</div></div>`;
+    }
+
+    // DNS authentication (optional: DMARC + DNSSEC)
+    if (r.dmarc || r.dnssec) {
+      html += `<div class="card result-section"><h3>DNS Authentication</h3><div class="kv-list">`;
+      if (r.dmarc) {
+        const m = r.dmarc;
+        let val;
+        if (!m.found) {
+          val = `<span class="kv-val not-found">❌ No DMARC record</span>`;
+        } else {
+          const pol = esc(m.policy || 'none');
+          const note = m.inherited
+            ? ` <span class="muted">(inherited from ${esc(m.inheritedFrom)})</span>`
+            : '';
+          val = `<span class="kv-val found">✅ p=${pol}${note}</span>`;
+        }
+        html += `<div class="kv-row"><span class="kv-name">DMARC</span>${val}</div>`;
+        if (m.found)
+          html += `<div class="kv-row"><span class="kv-name">DMARC record</span>
+            <span class="kv-val"><span class="dns-txt">${esc(m.record)}</span></span></div>`;
+      }
+      if (r.dnssec) {
+        const s = r.dnssec;
+        const val = s.signed
+          ? `<span class="kv-val found">✅ Signed${s.ds ? ', DS present' : ', no DS at parent'}${s.zone ? ` <span class="muted">(${esc(s.zone)})</span>` : ''}</span>`
+          : `<span class="kv-val not-found">❌ Not signed</span>`;
+        html += `<div class="kv-row"><span class="kv-name">DNSSEC</span>${val}</div>`;
+      }
+      html += `</div></div>`;
+    }
+
+    // Email security (optional: SPF / DKIM / MTA-STS / TLS-RPT)
+    if (r.spf || r.dkim || r.mtaSts || r.tlsRpt) {
+      const ok = t => `<span class="kv-val found">✅ ${t}</span>`;
+      const bad = t => `<span class="kv-val not-found">❌ ${t}</span>`;
+      const warn = t => `<span class="kv-val warn">⚠️ ${t}</span>`;
+      html += `<div class="card result-section"><h3>Email Security</h3><div class="kv-list">`;
+
+      if (r.spf) {
+        const s = r.spf;
+        let v;
+        if (!s.found) v = bad('No SPF record');
+        else if (s.tooManyLookups) v = warn(`${s.lookups} DNS lookups (>10 → PermError)`);
+        else if (s.all === 'fail' || s.all === 'softfail')
+          v = ok(`${s.all}${s.inherited ? ` (on ${esc(s.domain)})` : ''}`);
+        else v = warn(`weak default (${esc(s.all || 'no all')})`);
+        html += `<div class="kv-row"><span class="kv-name">SPF</span>${v}</div>`;
+        if (s.found) html += `<div class="kv-row"><span class="kv-name">SPF record</span>
+          <span class="kv-val"><span class="dns-txt">${esc(s.record)}</span></span></div>`;
+      }
+
+      if (r.dkim) {
+        const k = r.dkim;
+        const v = k.found
+          ? ok(`selector(s): ${k.selectors.map(esc).join(', ')}`)
+          : warn(`no common selectors found on ${esc(k.domain)}`);
+        html += `<div class="kv-row"><span class="kv-name">DKIM</span>${v}</div>`;
+      }
+
+      if (r.mtaSts) {
+        const m = r.mtaSts;
+        const v = m.found
+          ? (m.mode === 'enforce' ? ok(`mode=${esc(m.mode)}`)
+             : warn(`mode=${esc(m.mode || 'unknown')}`))
+          : bad('Not deployed');
+        html += `<div class="kv-row"><span class="kv-name">MTA-STS</span>${v}</div>`;
+      }
+
+      if (r.tlsRpt) {
+        const v = r.tlsRpt.found ? ok('Reporting configured') : bad('Not configured');
+        html += `<div class="kv-row"><span class="kv-name">TLS-RPT</span>${v}</div>`;
+      }
+
+      html += `<p class="muted score-note">DKIM is probed against common selectors only — absence is not proof it is unused. MTA-STS / TLS-RPT apply to domains that receive mail.</p>`;
+      html += `</div></div>`;
+    }
+
+    // Security headers
+    html += `<div class="card result-section"><h3>Security Headers</h3><div class="kv-list">`;
+    html += securityHeaderRow('Content Security Policy', r.securityHeaders['Content-Security-Policy']);
+    // CSP quality breakdown
+    const csp = r.cspAnalysis;
+    if (csp && csp.present && csp.issues && csp.issues.length) {
+      html += `<div class="issue-list">`;
+      for (const i of csp.issues)
+        html += `<div class="issue-row issue-${esc(i.severity)}">${esc(i.text)}</div>`;
+      html += `</div>`;
+    } else if (csp && csp.present) {
+      html += `<div class="issue-list"><div class="issue-row issue-ok">No obvious CSP weaknesses</div></div>`;
+    }
+    html += securityHeaderRow('Strict Transport Security', r.securityHeaders['Strict-Transport-Security']);
+    // HSTS preload eligibility
+    const hsts = r.hstsAnalysis;
+    if (hsts && hsts.present) {
+      const el = hsts.preloadEligible;
+      html += `<div class="issue-list"><div class="issue-row ${el ? 'issue-ok' : 'issue-low'}">
+        ${el ? '✅ Preload-eligible' : '⚠️ Not preload-eligible'}
+        — max-age=${hsts.maxAge ?? '?'}${hsts.includeSubDomains ? ', includeSubDomains' : ', no includeSubDomains'}${hsts.preload ? ', preload' : ', no preload directive'}</div></div>`;
+    }
+    html += securityHeaderRow('X-Frame-Options', r.securityHeaders['X-Frame-Options']);
+    html += securityHeaderRow('X-Content-Type-Options', r.securityHeaders['X-Content-Type-Options']);
+    html += securityHeaderRow('Referrer Policy', r.securityHeaders['Referrer-Policy']);
+    html += securityHeaderRow('Permissions Policy', r.securityHeaders['Permissions-Policy']);
+    html += `</div></div>`;
+
+    // Content & resources (mixed content + third-party inventory)
+    const pc = r.pageContent;
+    if (pc && pc.analyzed) {
+      html += `<div class="card result-section"><h3>Content &amp; Resources</h3>`;
+      const totalMixed = pc.mixedActiveCount + pc.mixedPassiveCount;
+      if (r.url.startsWith('https://')) {
+        if (totalMixed === 0) {
+          html += `<div class="kv-row"><span class="kv-name">Mixed content</span>
+            <span class="kv-val found">✅ None — all ${pc.resourceCount} resource(s) over HTTPS</span></div>`;
+        } else {
+          html += `<div class="kv-row"><span class="kv-name">Mixed content</span>
+            <span class="kv-val not-found">⚠️ ${pc.mixedActiveCount} active, ${pc.mixedPassiveCount} passive over http://</span></div>`;
+          html += `<div class="issue-list">`;
+          for (const m of pc.mixedActive)
+            html += `<div class="issue-row issue-high mono small">${esc(m.url)}</div>`;
+          for (const m of pc.mixedPassive)
+            html += `<div class="issue-row issue-med mono small">${esc(m.url)}</div>`;
+          html += `</div>`;
+        }
+      }
+      html += `<div class="kv-row" style="margin-top:10px"><span class="kv-name">Third-party hosts</span>
+        <span class="kv-val">${pc.thirdPartyCount}</span></div>`;
+      if (pc.thirdPartyHosts.length) {
+        html += `<div class="sans-tags" style="margin-top:8px">`;
+        pc.thirdPartyHosts.forEach(h =>
+          html += `<span class="san-tag">${esc(h.host)}${h.count > 1 ? ` ×${h.count}` : ''}</span>`);
+        html += `</div>`;
+        html += `<p class="muted score-note">Distinct external hosts this page loads resources from. Third parties widen the attack/privacy surface; no requests were made to them.</p>`;
+      }
+      html += `</div>`;
+    }
+
+    // security.txt + robots.txt
+    for (const [title, obj] of [['Security.txt', r.securityTxt], ['Robots.txt', r.robotsTxt]]) {
+      html += `<div class="card result-section"><h3>${title}</h3>
+        <div class="kv-row"><span class="kv-name">Status</span>
+          <span class="kv-val ${obj.found ? 'found' : 'not-found'}">${obj.found ? '✅ Found' : '❌ Not found'}</span></div>`;
+      if (obj.found && obj.content) html += `<pre class="file-content">${esc(obj.content)}</pre>`;
+      html += `</div>`;
+    }
+
+    // Cookies
+    if (r.cookies && r.cookies.length) {
+      html += `<div class="card result-section"><h3>Cookies</h3>
+        <table class="data-table"><thead><tr><th>Name</th><th>Secure</th><th>HttpOnly</th><th>SameSite</th></tr></thead><tbody>`;
+      for (const c of r.cookies) {
+        const ss = c.sameSite ? c.sameSite.charAt(0).toUpperCase() + c.sameSite.slice(1) : '❌ Not set';
+        html += `<tr><td class="mono">${esc(c.name)}</td>
+          <td class="${c.secure ? 'flag-ok' : 'flag-bad'}">${c.secure ? '✅' : '❌'}</td>
+          <td class="${c.httpOnly ? 'flag-ok' : 'flag-bad'}">${c.httpOnly ? '✅' : '❌'}</td>
+          <td class="${c.sameSite ? 'flag-ok' : 'flag-bad'}">${esc(ss)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    html += `<div class="timestamp">Analysis performed at ${esc(new Date(r.timestamp).toLocaleString())}</div>`;
+    urlResults.innerHTML = reportBar('url') + html;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Exposure Probe
+  // ══════════════════════════════════════════════════════════════════════
+  const expForm = document.getElementById('exposure-form');
+  const expBtn = document.getElementById('exp-btn');
+  const expStatus = document.getElementById('exp-status');
+  const expResults = document.getElementById('exp-results');
+
+  expForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const raw = document.getElementById('exp-url').value.trim();
+    if (!raw) return;
+    const url = formatUrl(raw);
+    expBtn.disabled = true;
+    expResults.innerHTML = '';
+    expStatus.hidden = false;
+    expStatus.className = 'status status--busy';
+    expStatus.innerHTML = `<span class="spinner"></span> Probing <code>${esc(url)}</code>…`;
+    try {
+      const res = await fetch('/api/exposures', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          username: document.getElementById('exp-username').value.trim(),
+          password: document.getElementById('exp-password').value,
+        }) });
+      const data = await res.json();
+      if (!res.ok) {
+        expStatus.className = 'status status--error';
+        expStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Probe failed.')}</strong>`;
+        return;
+      }
+      renderExposures(data);
+    } catch (err) {
+      expStatus.className = 'status status--error';
+      expStatus.innerHTML = `<strong>✗ Network error: ${esc(err.message)}</strong>`;
+    } finally { expBtn.disabled = false; }
+  });
+
+  function renderExposures(data) {
+    expStatus.hidden = true;
+    const badge = data.exposedCount ? 'badge-down' : 'badge-up';
+    let html = `<div class="card result-section"><h3>Exposed Files
+      <span class="badge ${badge}">${data.exposedCount} exposed</span></h3>
+      <table class="data-table"><thead><tr>
+        <th>Path</th><th>What</th><th>Severity</th><th>Status</th><th>Result</th></tr></thead><tbody>`;
+    for (const f of data.findings) {
+      html += `<tr><td class="mono">${esc(f.path)}</td>
+        <td>${esc(f.label)}</td>
+        <td>${esc(f.severity)}</td>
+        <td>${f.status ?? '<span class="muted">—</span>'}</td>
+        <td class="${f.exposed ? 'flag-bad' : 'flag-ok'}">${f.exposed ? '⚠ exposed' : '✅ ok'}</td></tr>`;
+    }
+    html += `</tbody></table></div>`;
+
+    const mis = data.misconfig || [];
+    if (mis.length) {
+      const mbadge = data.misconfigCount ? 'badge-down' : 'badge-up';
+      html += `<div class="card result-section"><h3>Misconfigurations
+        <span class="badge ${mbadge}">${data.misconfigCount} issue${data.misconfigCount === 1 ? '' : 's'}</span></h3>
+        <table class="data-table"><thead><tr>
+          <th>Check</th><th>Severity</th><th>Result</th><th>Detail</th></tr></thead><tbody>`;
+      for (const m of mis) {
+        html += `<tr><td>${esc(m.check)}</td>
+          <td>${esc(m.severity)}</td>
+          <td class="${m.status === 'bad' ? 'flag-bad' : 'flag-ok'}">${m.status === 'bad' ? '⚠ issue' : '✅ ok'}</td>
+          <td>${esc(m.detail)}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+    expResults.innerHTML = reportBar('exposure') + html;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Repo Audit
+  // ══════════════════════════════════════════════════════════════════════
+  const repoForm = document.getElementById('repo-form');
+  const repoBtn = document.getElementById('repo-btn');
+  const repoStatus = document.getElementById('repo-status');
+  const repoResults = document.getElementById('repo-results');
+  const repoUrl = document.getElementById('repo-url');
+  const repoLocal = document.getElementById('repo-local');
+  const repoLabel = document.getElementById('repo-input-label');
+  let localLoaded = false;
+  let repoFindings = { dep: [], mis: [] };   // last audit's findings, for the detail dialog
+
+  function repoIsLocal() {
+    return repoForm.querySelector('input[name="repo-source"]:checked').value === 'local';
+  }
+
+  async function loadLocalRepos() {
+    repoLocal.innerHTML = '<option value="">Loading…</option>';
+    try {
+      const res = await fetch('/api/local-repos');
+      const data = await res.json();
+      if (!data.mounted) {
+        repoLocal.innerHTML = `<option value="">No audit folder mounted at ${esc(data.root)}</option>`;
+      } else if (!data.repos.length) {
+        repoLocal.innerHTML = `<option value="">No clones found in ${esc(data.root)}</option>`;
+      } else {
+        repoLocal.innerHTML = data.repos.map(r =>
+          `<option value="${esc(r.name)}"${r.git ? '' : ' disabled'}>${esc(r.name)}${r.git ? '' : ' (not a git repo)'}</option>`).join('');
+      }
+    } catch (err) {
+      repoLocal.innerHTML = '<option value="">Failed to list repos</option>';
+    }
+    localLoaded = true;
+  }
+
+  repoForm.querySelectorAll('input[name="repo-source"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const local = repoIsLocal();
+      repoUrl.hidden = local;
+      repoLocal.hidden = !local;
+      repoLabel.textContent = local ? 'Local clone' : 'Repository URL';
+      repoLabel.setAttribute('for', local ? 'repo-local' : 'repo-url');
+      if (local && !localLoaded) loadLocalRepos();
+    });
+  });
+
+  repoForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const local = repoIsLocal();
+    const repo = repoUrl.value.trim(), name = repoLocal.value;
+    if (local ? !name : !repo) return;
+    const body = local ? { local: name } : { repo };
+    const label = local ? name : repo;
+    repoBtn.disabled = true;
+    repoResults.innerHTML = '';
+    repoStatus.hidden = false;
+    repoStatus.className = 'status status--busy';
+    repoStatus.innerHTML = `<span class="spinner"></span> ${local ? 'Auditing' : 'Cloning &amp; auditing'}
+      <code>${esc(label)}</code>… this can take a while.`;
+    try {
+      const res = await fetch('/api/repo-audit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) {
+        repoStatus.className = 'status status--error';
+        repoStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Audit failed.')}</strong>`;
+        return;
+      }
+      renderRepoAudit(data);
+    } catch (err) {
+      repoStatus.className = 'status status--error';
+      repoStatus.innerHTML = `<strong>✗ Network error: ${esc(err.message)}</strong>`;
+    } finally { repoBtn.disabled = false; }
+  });
+
+  function renderRepoAudit(data) {
+    repoStatus.hidden = true;
+    const secrets = data.secrets || [], deps = data.dependencies || [];
+    let html = '';
+
+    html += `<div class="card result-section"><h3>Secrets
+      <span class="badge ${secrets.length ? 'badge-down' : 'badge-up'}">${secrets.length}</span></h3>`;
+    if (secrets.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Rule</th><th>File</th><th>Line</th><th>Commit</th><th>Preview</th></tr></thead><tbody>`;
+      for (const s of secrets)
+        html += `<tr><td>${esc(s.rule)}</td><td class="mono">${esc(s.file)}</td>
+          <td class="mono">${s.line ?? '—'}</td><td class="mono">${esc(s.commit)}</td>
+          <td class="mono">${esc(s.preview)}</td></tr>`;
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No secrets detected.</p>`; }
+    html += `</div>`;
+
+    html += `<div class="card result-section"><h3>Vulnerable Dependencies
+      <span class="badge ${deps.length ? 'badge-down' : 'badge-up'}">${deps.length}</span></h3>`;
+    if (deps.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Package</th><th>Version</th><th>Fixed in</th><th>Severity</th><th>Advisory</th></tr></thead><tbody>`;
+      deps.forEach((v, i) => {
+        html += `<tr data-sev="${sevKey(v.severity)}"><td class="mono">${esc(v.package)}</td>
+          <td class="mono">${esc(v.version)}</td>
+          <td class="mono">${esc(v.fixedVersion) || '<span class="muted">—</span>'}</td>
+          <td>${esc(v.severity)}</td>
+          <td><button type="button" class="link-btn" data-finding="dep" data-idx="${i}">${esc(v.id)}</button>${v.title ? ` — ${esc(v.title)}` : ''}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No known-vulnerable dependencies found.</p>`; }
+    html += `</div>`;
+
+    const mis = data.misconfigurations || [];
+    repoFindings = { dep: deps, mis: mis };   // looked up by the detail dialog
+    html += `<div class="card result-section"><h3>IaC Misconfigurations
+      <span class="badge ${mis.length ? 'badge-down' : 'badge-up'}">${mis.length}</span></h3>`;
+    if (mis.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>ID</th><th>Type</th><th>Severity</th><th>File</th><th>Issue</th></tr></thead><tbody>`;
+      mis.forEach((m, i) => {
+        html += `<tr data-sev="${sevKey(m.severity)}"><td class="mono"><button type="button" class="link-btn" data-finding="mis" data-idx="${i}">${esc(m.id)}</button></td><td>${esc(m.type)}</td>
+          <td>${esc(m.severity)}</td>
+          <td class="mono">${esc(m.target)}${m.line ? ':' + m.line : ''}</td>
+          <td>${esc(m.title)}${m.resolution ? ` — <span class="muted">${esc(m.resolution)}</span>` : ''}</td></tr>`;
+      });
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No IaC misconfigurations found.</p>`; }
+    html += `</div>`;
+
+    const lic = data.licenses || [];
+    html += `<div class="card result-section"><h3>License Risks
+      <span class="badge ${lic.length ? 'badge-down' : 'badge-up'}">${lic.length}</span></h3>`;
+    if (lic.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Package</th><th>License</th><th>Category</th><th>Severity</th></tr></thead><tbody>`;
+      for (const l of lic)
+        html += `<tr data-sev="${sevKey(l.severity)}"><td class="mono">${esc(l.package)}</td><td>${esc(l.name)}</td>
+          <td>${esc(l.category)}</td><td>${esc(l.severity)}</td></tr>`;
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No flagged licenses.</p>`; }
+    html += `</div>`;
+
+    const dock = data.dockerfile || [];
+    html += `<div class="card result-section"><h3>Dockerfile Lint
+      <span class="badge ${dock.length ? 'badge-down' : 'badge-up'}">${dock.length}</span></h3>`;
+    if (dock.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Rule</th><th>Level</th><th>File</th><th>Message</th></tr></thead><tbody>`;
+      for (const d of dock)
+        html += `<tr><td class="mono">${esc(d.code)}</td><td>${esc(d.level)}</td>
+          <td class="mono">${esc(d.file)}${d.line ? ':' + d.line : ''}</td>
+          <td>${esc(d.message)}</td></tr>`;
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No Dockerfile issues (or no Dockerfile present).</p>`; }
+    html += `</div>`;
+
+    const act = data.actions || [];
+    html += `<div class="card result-section"><h3>GitHub Actions Audit
+      <span class="badge ${act.length ? 'badge-down' : 'badge-up'}">${act.length}</span></h3>`;
+    if (act.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>Rule</th><th>Level</th><th>File</th><th>Finding</th></tr></thead><tbody>`;
+      for (const a of act)
+        html += `<tr><td class="mono">${esc(a.rule)}</td><td>${esc(a.level)}</td>
+          <td class="mono">${esc(a.file)}${a.line ? ':' + a.line : ''}</td>
+          <td>${esc(a.message)}</td></tr>`;
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No workflow findings (or no workflows present).</p>`; }
+    html += `</div>`;
+
+    const sbom = data.sbom;
+    if (sbom && sbom.document) {
+      html += `<div class="card result-section"><h3>SBOM
+        <span class="badge badge-up">${sbom.componentCount} components</span></h3>
+        <p class="hint">${esc(sbom.format)} ${esc(sbom.specVersion || '')} software bill of materials
+          for this repository.</p>
+        <button type="button" class="btn-primary" id="sbom-dl" style="padding: 11px 24px; margin-top: 4px;">Download SBOM (JSON)</button></div>`;
+    }
+
+    html += `<div class="timestamp">Audited ${esc(data.repo)} at ${esc(new Date(data.timestamp).toLocaleString())}</div>`;
+    const hasSeverities = deps.length || mis.length || lic.length;
+    repoResults.innerHTML = reportBar('repo') + (hasSeverities ? repoFilterBar() : '') + html;
+    if (hasSeverities)
+      document.querySelectorAll('#repo-results [data-sev-filter]')
+        .forEach(c => c.addEventListener('change', applyRepoFilter));
+
+    const dl = document.getElementById('sbom-dl');
+    if (dl && sbom && sbom.document) {
+      dl.addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(sbom.document, null, 2)], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (data.repo.split('/').pop() || 'repo') + '-sbom.cdx.json';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+    }
+  }
+
+  // ── Repo Audit: finding detail dialog ──────────────────────────────────
+  // Clicking a CVE / misconfiguration ID opens an in-app dialog with the full
+  // Trivy detail (CVSS, CWE, description, reference links) — no external page.
+  const findingDialog = document.getElementById('finding-dialog');
+  const findingBody = document.getElementById('finding-body');
+  const findingTitle = document.getElementById('finding-title');
+  const httpUrl = u => (/^https?:\/\//i.test(u || '') ? u : null);   // block javascript:/data: hrefs
+  const metaRow = (k, v) => `<dt>${esc(k)}</dt><dd>${esc(v == null || v === '' ? '—' : String(v))}</dd>`;
+  const findingSection = (label, text) =>
+    `<div class="finding-section"><h4>${esc(label)}</h4><p>${esc(text)}</p></div>`;
+
+  function openFinding(kind, idx) {
+    const f = (repoFindings[kind] || [])[idx];
+    if (!f) return;
+    findingTitle.textContent = f.id || (kind === 'dep' ? 'Vulnerability' : 'Misconfiguration');
+    const sev = sevKey(f.severity);
+    let h = `<div class="finding-body-head"><span class="sev-pill sev-${sev}">${esc(f.severity || '—')}</span>`;
+    const primary = httpUrl(f.primaryUrl);
+    if (primary)
+      h += `<span class="finding-primary"><a href="${esc(primary)}" target="_blank" rel="noopener noreferrer">${esc(f.id)} ↗</a></span>`;
+    h += `</div><dl class="finding-meta">`;
+    if (kind === 'dep') {
+      h += metaRow('Package', f.package) + metaRow('Installed', f.version)
+         + metaRow('Fixed in', f.fixedVersion);
+      if (f.cvssScore != null) h += metaRow('CVSS', `${f.cvssScore}${f.cvssVector ? '  ·  ' + f.cvssVector : ''}`);
+      if (f.cweIDs && f.cweIDs.length) h += metaRow('CWE', f.cweIDs.join(', '));
+      if (f.publishedDate) h += metaRow('Published', String(f.publishedDate).slice(0, 10));
+    } else {
+      h += metaRow('Type', f.type) + metaRow('File', `${f.target || ''}${f.line ? ':' + f.line : ''}`);
+      if (f.resolution) h += metaRow('Resolution', f.resolution);
+    }
+    h += `</dl>`;
+    if (f.title) h += findingSection('Summary', f.title);
+    const desc = f.description || (kind === 'mis' ? f.message : '');
+    if (desc) h += findingSection('Description', desc);
+    const refs = (f.references || []).map(httpUrl).filter(Boolean);
+    if (refs.length)
+      h += `<div class="finding-section"><h4>References</h4><div class="finding-refs">`
+         + refs.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join('')
+         + `</div></div>`;
+    findingBody.innerHTML = h;
+    findingBody.scrollTop = 0;
+    findingDialog.showModal();
+  }
+
+  repoResults.addEventListener('click', e => {
+    const btn = e.target.closest('.link-btn');
+    if (btn && btn.dataset.finding) openFinding(btn.dataset.finding, +btn.dataset.idx);
+  });
+  document.getElementById('finding-close').addEventListener('click', () => findingDialog.close());
+  document.getElementById('finding-cancel').addEventListener('click', () => findingDialog.close());
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Subdomains
+  // ══════════════════════════════════════════════════════════════════════
+  const subForm = document.getElementById('subdomains-form');
+  const subBtn = document.getElementById('subdomains-btn');
+  const subStatus = document.getElementById('subdomains-status');
+  const subResults = document.getElementById('subdomains-results');
+
+  subForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const domain = document.getElementById('subdomains-domain').value.trim();
+    if (!domain) return;
+    subBtn.disabled = true;
+    subResults.innerHTML = '';
+    subStatus.hidden = false;
+    subStatus.className = 'status status--busy';
+    subStatus.innerHTML = `<span class="spinner"></span> Searching certificate-transparency logs for <code>${esc(domain)}</code>…`;
+    try {
+      const res = await fetch('/api/subdomains', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain }) });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        subStatus.className = 'status status--error';
+        subStatus.innerHTML = `<strong>✗ ${esc(data.error || 'Lookup failed.')}</strong>`;
+        return;
+      }
+      subdomainsSaved.showLive(data);
+    } catch (err) {
+      subStatus.className = 'status status--error';
+      subStatus.innerHTML = `<strong>✗ Network error: ${esc(err.message)}</strong>`;
+    } finally { subBtn.disabled = false; }
+  });
+
+  // Inline monochrome icons for the per-row subdomain actions.
+  const SUB_ICON = {
+    copy: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`,
+    check:`<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+    ext:  `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>`,
+    scan: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3.5"></circle><line x1="12" y1="1.5" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22.5"></line><line x1="1.5" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22.5" y2="12"></line></svg>`,
+    live: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>`,
+    note: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>`,
+  };
+
+  // `ctx` is null for a live lookup, or the saved scan's record when replaying a
+  // stored one — the same contract renderSubnet uses. Saved mode adds the scan
+  // bar, a notes column and new/gone badges; live mode renders as it always has.
+  function renderSubdomains(r, ctx) {
+    subStatus.hidden = true;
+    const notes = (ctx && ctx.notes) || {};
+    const newKeys = new Set((ctx && ctx.newKeys) || []);
+    // Names that showed up last time but not now are kept, greyed out, so a
+    // retired subdomain (and its note) stays visible.
+    const rows = (r.names || []).map(n => ({ n, gone: false }))
+      .concat(((ctx && ctx.goneItems) || []).map(n => ({ n, gone: true })));
+
+    let html = ctx ? subdomainsSaved.bar(ctx) : '';
+    if (!rows.length) {
+      html += `<div class="card result-section"><h3>Subdomains</h3>
+        <p class="muted">No certificates found for <code>${esc(r.domain)}</code> in the CT logs.</p></div>`;
+      subResults.innerHTML = html;
+      return;
+    }
+    html += `<div class="card result-section">
+      <h3>Subdomains <span class="port-range">${r.resolvingCount} live · ${r.count} total`
+      + (r.truncated ? `, capped at ${r.count}` : '') + `</span></h3>
+      <table class="data-table"><thead><tr><th>Subdomain</th><th>Resolves</th><th>IPv4</th>`
+      + (ctx ? `<th>Note</th>` : '') + `</tr></thead><tbody>`;
+    for (const { n, gone } of rows) {
+      // Wildcard CT entries (*.example.com) aren't real hosts — only offer copy.
+      const isWild = n.name.includes('*');
+      const badge = gone ? `<span class="host-badge gone">gone</span>`
+        : newKeys.has(n.name) ? `<span class="host-badge new">new</span>` : '';
+      const nameCell = `${esc(n.name)}${badge}<span class="row-actions">`
+        + `<button type="button" class="row-btn" data-copy="${esc(n.name)}" title="Copy subdomain" aria-label="Copy subdomain">${SUB_ICON.copy}</button>`
+        + (isWild ? '' :
+            `<button type="button" class="row-btn" data-live="${esc(n.name)}" title="Check if this host is live" aria-label="Check if this host is live">${SUB_ICON.live}</button>`
+          + `<a class="row-btn" href="https://${esc(n.name)}" target="_blank" rel="noopener noreferrer" title="Open in new tab" aria-label="Open in new tab">${SUB_ICON.ext}</a>`)
+        + (ctx ? subdomainsSaved.noteBtn(n.name, !!notes[n.name]) : '')
+        + `</span>`;
+      const ipCell = n.addresses.length
+        ? n.addresses.map(a =>
+            `<span class="ip-entry">${esc(a)}<button type="button" class="row-btn" data-scan-ip="${esc(a)}" title="Scan ${esc(a)} in Network Scan" aria-label="Scan this IP in Network Scan">${SUB_ICON.scan}</button></span>`
+          ).join('')
+        : '<span class="muted">—</span>';
+      // Truncated to one line in CSS, so carry the full text as a tooltip.
+      const noteCell = ctx
+        ? `<td class="note-cell"${notes[n.name] ? ` title="${esc(notes[n.name].note)}"` : ''}>`
+          + `${notes[n.name] ? esc(notes[n.name].note) : '<span class="muted">—</span>'}</td>`
+        : '';
+      html += `<tr${gone ? ' class="row-gone"' : ''}>
+        <td class="mono">${nameCell}</td>
+        <td class="${n.resolves ? 'flag-ok' : 'flag-bad'}">${n.resolves ? '✅' : '—'}</td>
+        <td class="mono small">${ipCell}</td>
+        ${noteCell}
+      </tr>`;
+    }
+    const sources = (r.sources && r.sources.length) ? r.sources.join(', ') : 'none';
+    html += `</tbody></table>
+      <p class="timestamp">Sources: ${esc(sources)}</p></div>`;
+    subResults.innerHTML = reportBar('subdomains', ctx ? '' : subdomainsSaved.saveBtn()) + html;
+  }
+
+  // Copy text to the clipboard with a plain-context fallback, then flash the
+  // button to a checkmark so the user gets feedback.
+  function copyText(text, btn) {
+    const done = () => {
+      if (!btn) return;
+      const original = btn.innerHTML;
+      btn.innerHTML = SUB_ICON.check;
+      btn.classList.add('copied');
+      setTimeout(() => { btn.innerHTML = original; btn.classList.remove('copied'); }, 1200);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'absolute'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) {} finally { ta.remove(); }
+  }
+
+  // Jump to Network Scan with the chosen IP pre-filled, ready to scan.
+  function prefillNetscan(ip) {
+    const target = document.getElementById('target');
+    if (target) target.value = ip;
+    activateView('netscan');
+    if (target) target.focus();
+  }
+
+  // Delegated: subResults is a persistent element, its innerHTML is replaced.
+  subResults.addEventListener('click', e => {
+    const copyBtn = e.target.closest('[data-copy]');
+    if (copyBtn) { copyText(copyBtn.dataset.copy, copyBtn); return; }
+    const scanBtn = e.target.closest('[data-scan-ip]');
+    if (scanBtn) { prefillNetscan(scanBtn.dataset.scanIp); return; }
+    const liveBtn = e.target.closest('[data-live]');
+    if (liveBtn) { openLiveDialog(liveBtn.dataset.live); }
+  });
+
+  // ── Subdomains: is-this-host-live probe ────────────────────────────────
+  const liveDialog = document.getElementById('live-dialog');
+  const liveBody = document.getElementById('live-body');
+  const liveTitle = document.getElementById('live-title');
+
+  function liveRow(label, icon, detail) {
+    return `<div class="live-row"><span class="live-label">${esc(label)}</span>`
+      + `<span class="live-state">${icon}</span><span class="live-detail">${detail}</span></div>`;
+  }
+  function liveHttpRow(label, r) {
+    r = r || {};
+    if (!r.responded) return liveRow(label, '❌', esc(r.error || 'no response'));
+    const bits = [`HTTP ${r.code}`, `${r.latencyMs} ms`];
+    if (r.server) bits.push(r.server);
+    let detail = esc(bits.join(' · '));
+    if (r.finalUrl) detail += `<br><span class="muted">→ ${esc(r.finalUrl)}</span>`;
+    return liveRow(label, r.code < 400 ? '✅' : '⚠️', detail);
+  }
+  function renderLive(d) {
+    const ic = d.icmp || {};
+    return liveRow('DNS', d.ip ? '✅' : '❌', d.ip ? esc(d.ip) : 'does not resolve')
+      + liveRow('ICMP', ic.reachable ? '✅' : '❌',
+          ic.reachable ? (ic.rttMs != null ? `reply in ${esc(ic.rttMs)} ms` : 'reachable') : 'no reply')
+      + liveHttpRow('HTTPS', d.https)
+      + liveHttpRow('HTTP', d.http);
+  }
+  async function openLiveDialog(name) {
+    liveTitle.textContent = name;
+    liveBody.innerHTML = `<div class="live-loading"><span class="spinner"></span> Probing <code>${esc(name)}</code>…</div>`;
+    liveDialog.showModal();
+    try {
+      const res = await fetch('/api/subdomain-live', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }) });
+      const d = await res.json();
+      if (!res.ok || d.error) { liveBody.innerHTML = `<p class="muted">${esc(d.error || 'Check failed.')}</p>`; return; }
+      liveBody.innerHTML = renderLive(d);
+    } catch (err) {
+      liveBody.innerHTML = `<p class="muted">Network error: ${esc(err.message)}</p>`;
+    }
+  }
+  document.getElementById('live-close').addEventListener('click', () => liveDialog.close());
+  document.getElementById('live-cancel').addEventListener('click', () => liveDialog.close());
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Console (allowlisted network tools)
+  // ══════════════════════════════════════════════════════════════════════
+  // The tool menu is fetched from the server rather than hardcoded here, so the
+  // dialog can only ever offer what /api/console will actually run. The browser
+  // sends a tool id + a target; it never composes a command line.
+  const consoleDialog = document.getElementById('console-dialog');
+  const consoleForm = document.getElementById('console-form');
+  const consoleTool = document.getElementById('console-tool');
+  const consoleRtype = document.getElementById('console-rtype');
+  const consoleTarget = document.getElementById('console-target');
+  const consoleRun = document.getElementById('console-run');
+  const consoleOut = document.getElementById('console-out');
+  const consoleHint = document.getElementById('console-hint');
+  let consoleTools = null;   // null until the menu has loaded
+  let consoleBusy = false;
+
+  async function loadConsoleTools() {
+    if (consoleTools) return;
+    const res = await fetch('/api/console/tools');
+    const d = await res.json();
+    consoleTools = d.tools || [];
+    consoleTool.innerHTML = consoleTools
+      .map(t => `<option value="${esc(t.id)}">${esc(t.label)}</option>`).join('');
+    consoleRtype.innerHTML = (d.dnsTypes || [])
+      .map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    syncConsoleTool();
+  }
+
+  // The record-type picker only means anything for dig, so it follows the tool.
+  function syncConsoleTool() {
+    const t = (consoleTools || []).find(x => x.id === consoleTool.value);
+    consoleRtype.hidden = consoleTool.value !== 'dig';
+    consoleHint.textContent = t ? `${t.argv} <target>${consoleTool.value === 'dig' ? ' <type>' : ''} — ${t.hint}` : '';
+  }
+  consoleTool.addEventListener('change', syncConsoleTool);
+
+  function consoleEcho(cls, text) {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    consoleOut.appendChild(line);
+    consoleOut.scrollTop = consoleOut.scrollHeight;
+    return line;
+  }
+
+  consoleForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (consoleBusy) return;
+    const target = consoleTarget.value.trim();
+    if (!target) return;
+
+    consoleBusy = true;
+    consoleRun.disabled = true;
+    consoleRun.textContent = 'Running…';
+    const pending = consoleEcho('console-cmd', `$ ${consoleTool.value} ${target}`);
+
+    try {
+      const res = await fetch('/api/console', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: consoleTool.value, target,
+                               recordType: consoleRtype.value }) });
+      const d = await res.json();
+      if (!res.ok || d.error) {
+        consoleEcho('console-err', d.error || 'Command failed.');
+      } else {
+        // Replace the optimistic echo with the argv the server actually ran.
+        pending.textContent = `$ ${d.command}`;
+        if (d.output.trim()) consoleEcho('', d.output.replace(/\n+$/, ''));
+        const bits = [`${d.durationMs} ms`];
+        if (d.exitCode !== null && d.exitCode !== 0) bits.push(`exit ${d.exitCode}`);
+        consoleEcho('console-meta', bits.join(' · '));
+      }
+    } catch (err) {
+      consoleEcho('console-err', `Network error: ${err.message}`);
+    } finally {
+      consoleBusy = false;
+      consoleRun.disabled = false;
+      consoleRun.textContent = 'Run';
+      consoleTarget.focus();
+    }
+  });
+
+  document.getElementById('console-btn').addEventListener('click', async () => {
+    consoleDialog.showModal();
+    consoleTarget.focus();
+    try {
+      await loadConsoleTools();
+    } catch (e) {
+      consoleEcho('console-err', `Could not load tools: ${e.message}`);
+    }
+  });
+  document.getElementById('console-close').addEventListener('click', () => consoleDialog.close());
+  document.getElementById('console-cancel').addEventListener('click', () => consoleDialog.close());
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  History (saved reports)
+  // ══════════════════════════════════════════════════════════════════════
+  const historyList = document.getElementById('history-list');
+  const historyTool = document.getElementById('history-tool');
+  let historyItems = [];
+
+  const fmtBytes = n => (n == null ? '—' : n < 1024 ? n + ' B' : (n / 1024).toFixed(1) + ' KB');
+  const fmtWhen = iso => { const d = new Date(iso); return isNaN(d) ? esc(iso) : d.toLocaleString(); };
+
+  async function loadHistory() {
+    historyList.innerHTML = `<p class="muted">Loading…</p>`;
+    try {
+      const res = await fetch('/api/history');
+      const d = await res.json();
+      historyItems = d.items || [];
+      renderHistory();
+    } catch (e) {
+      historyList.innerHTML = `<p class="muted">Could not load history: ${esc(e.message)}</p>`;
+    }
+  }
+
+  function renderHistory() {
+    const sel = historyTool.value;
+    const items = sel === 'all' ? historyItems : historyItems.filter(i => i.tool === sel);
+    if (!items.length) {
+      historyList.innerHTML = `<div class="pane-empty"><span class="prompt">&gt;</span> `
+        + `No saved reports yet. Run a tool and click <strong>Add to history</strong>.</div>`;
+      return;
+    }
+    let html = `<table class="data-table"><thead><tr>
+      <th>Tool</th><th>Name / Target</th><th>Saved</th><th>Size</th><th></th></tr></thead><tbody>`;
+    for (const it of items) {
+      const url = `/api/history/${encodeURIComponent(it.tool)}/${encodeURIComponent(it.filename)}`;
+      const label = it.label || '';
+      const primary = label || it.target || '—';
+      const sub = (label && it.target && label !== it.target)
+        ? `<div class="muted small">${esc(it.target)}</div>` : '';
+      html += `<tr>
+        <td>${esc(TOOL_META[it.tool] ? TOOL_META[it.tool].name : it.tool)}</td>
+        <td class="mono">${esc(primary)}${sub}</td>
+        <td class="mono small">${fmtWhen(it.createdAt)}</td>
+        <td class="mono small">${esc(fmtBytes(it.size))}</td>
+        <td class="history-row-actions">
+          <a class="btn-secondary btn-mini" href="${url}" target="_blank" rel="noopener noreferrer">Open</a>
+          <a class="btn-secondary btn-mini" href="${url}?download=1">Download</a>
+          <button type="button" class="btn-secondary btn-mini" data-ren-tool="${esc(it.tool)}" data-ren-name="${esc(it.filename)}" data-ren-cur="${esc(label || it.target || '')}">Rename</button>
+          <button type="button" class="btn-secondary btn-mini" data-del-tool="${esc(it.tool)}" data-del-name="${esc(it.filename)}">Delete</button>
+        </td></tr>`;
+    }
+    historyList.innerHTML = html + `</tbody></table>`;
+  }
+
+  historyTool.addEventListener('change', renderHistory);
+  document.getElementById('history-refresh').addEventListener('click', loadHistory);
+  historyList.addEventListener('click', async e => {
+    const ren = e.target.closest('[data-ren-tool]');
+    if (ren) {
+      const name = prompt('Name for this report (leave blank to clear):', ren.dataset.renCur || '');
+      if (name === null) return;   // cancelled
+      try {
+        const res = await fetch(`/api/history/${encodeURIComponent(ren.dataset.renTool)}/${encodeURIComponent(ren.dataset.renName)}`,
+          { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: name.trim() }) });
+        if (!res.ok) throw new Error('Rename failed');
+        loadHistory();
+      } catch (err) { alert('Could not rename: ' + err.message); }
+      return;
+    }
+    const del = e.target.closest('[data-del-tool]');
+    if (!del) return;
+    if (!confirm('Delete this saved report? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/history/${encodeURIComponent(del.dataset.delTool)}/${encodeURIComponent(del.dataset.delName)}`,
+        { method: 'DELETE' });
+      if (!res.ok) throw new Error('Delete failed');
+      loadHistory();
+    } catch (err) { alert('Could not delete: ' + err.message); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Availability Dashboard
+  // ══════════════════════════════════════════════════════════════════════
+  const monForm = document.getElementById('monitor-form');
+  const monType = document.getElementById('monitor-type');
+  const monErr = document.getElementById('monitor-error');
+  const DASH_POLL_MS = 15000;
+  let dashTimer = null;
+  let lastSeenEventId = 0;
+  let dashPrimed = false;   // suppress notifications on the very first load
+
+  const TYPE_TARGET_LABEL = { http: 'URL', api: 'URL', tcp: 'Host / IP', icmp: 'Host / IP' };
+  const TYPE_TARGET_PH = {
+    http: 'https://api.example.com/health', api: 'https://api.example.com/health',
+    tcp: 'db.example.com', icmp: '192.168.1.10' };
+
+  function syncMonitorFields() {
+    const t = monType.value;
+    document.getElementById('monitor-target-label').textContent = TYPE_TARGET_LABEL[t];
+    document.getElementById('monitor-target').placeholder = TYPE_TARGET_PH[t];
+    document.getElementById('mon-field-port').hidden = t !== 'tcp';
+    document.getElementById('mon-field-http').hidden = !(t === 'http' || t === 'api');
+    document.getElementById('mon-field-auth').hidden = t !== 'api';
+  }
+  monType.addEventListener('change', syncMonitorFields);
+  syncMonitorFields();
+
+  function resetMonitorForm() {
+    monForm.reset();
+    document.getElementById('monitor-id').value = '';
+    monErr.hidden = true;
+    syncMonitorFields();
+  }
+
+  // The form lives in a dialog and serves both Add and Edit: openMonitorDialog()
+  // with no argument is Add, with a monitor is Edit. monitor-id decides whether
+  // the submit POSTs or PATCHes.
+  const monDialog = document.getElementById('monitor-dialog');
+  function openMonitorDialog(m) {
+    resetMonitorForm();
+    document.getElementById('monitor-title').textContent = m ? 'Edit monitor' : 'Add monitor';
+    document.getElementById('monitor-submit').textContent = m ? 'Save changes' : 'Add monitor';
+    if (m) fillMonitorForm(m);
+    monDialog.showModal();
+    document.getElementById('monitor-name').focus();
+  }
+  function closeMonitorDialog() { monDialog.close(); resetMonitorForm(); }
+  document.getElementById('monitor-add').addEventListener('click', () => openMonitorDialog());
+  document.getElementById('monitor-cancel').addEventListener('click', closeMonitorDialog);
+  document.getElementById('monitor-close').addEventListener('click', closeMonitorDialog);
+  // Esc closes the dialog itself; clear the form so the next Add starts empty.
+  monDialog.addEventListener('close', resetMonitorForm);
+
+  monForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    monErr.hidden = true;
+    const id = document.getElementById('monitor-id').value;
+    const body = {
+      name: document.getElementById('monitor-name').value.trim(),
+      type: monType.value,
+      target: document.getElementById('monitor-target').value.trim(),
+      port: document.getElementById('monitor-port').value || null,
+      expectedStatus: document.getElementById('monitor-status').value || null,
+      expectedKeyword: document.getElementById('monitor-keyword').value.trim(),
+      authHeader: document.getElementById('monitor-auth').value.trim(),
+      interval: document.getElementById('monitor-interval').value,
+    };
+    try {
+      const res = await fetch(id ? `/api/monitors/${id}` : '/api/monitors', {
+        method: id ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) { monErr.textContent = data.error || 'Could not save monitor.'; monErr.hidden = false; return; }
+      closeMonitorDialog();
+      refreshDashboard();
+    } catch (err) { monErr.textContent = 'Network error: ' + err.message; monErr.hidden = false; }
+  });
+
+  function fillMonitorForm(m) {
+    document.getElementById('monitor-id').value = m.id;
+    document.getElementById('monitor-name').value = m.name;
+    monType.value = m.type;
+    document.getElementById('monitor-target').value = m.target;
+    document.getElementById('monitor-port').value = m.port ?? '';
+    document.getElementById('monitor-status').value = m.expectedStatus ?? '';
+    document.getElementById('monitor-keyword').value = m.expectedKeyword ?? '';
+    document.getElementById('monitor-auth').value = '';
+    document.getElementById('monitor-interval').value = String(m.interval);
+    syncMonitorFields();
+  }
+  const editMonitor = m => openMonitorDialog(m);
+
+  async function monitorAction(id, method, path = '') {
+    await fetch(`/api/monitors/${id}${path}`, { method });
+    refreshDashboard();
+  }
+  async function toggleMonitor(id, enabled) {
+    await fetch(`/api/monitors/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }) });
+    refreshDashboard();
+  }
+
+  function fmtAgo(iso) {
+    if (!iso) return 'never';
+    const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return Math.round(s) + 's ago';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+  }
+  const STATUS_BADGE = { up: 'badge-up', down: 'badge-down', unknown: 'st-other' };
+
+  function renderDashboard(d) {
+    document.getElementById('dc-up').textContent = d.summary.up;
+    document.getElementById('dc-down').textContent = d.summary.down;
+    document.getElementById('dc-unknown').textContent = d.summary.unknown;
+
+    const wrap = document.getElementById('dash-monitors');
+    if (!d.monitors.length) {
+      wrap.innerHTML = `<div class="card"><p class="muted">No monitors yet. Add one above to start tracking availability.</p></div>`;
+    } else {
+      let html = `<div class="card result-section"><h3>Monitors</h3>
+        <table class="data-table"><thead><tr>
+        <th>Name</th><th>Target</th><th>Status</th><th>Latency</th><th>Checked</th><th></th>
+        </tr></thead><tbody>`;
+      for (const m of d.monitors) {
+        const badge = STATUS_BADGE[m.status] || 'st-other';
+        const detail = (m.status === 'down' && m.lastError) ? ` <span class="muted">${esc(m.lastError)}</span>` : '';
+        const dim = m.enabled ? '' : ' style="opacity:.5"';
+        html += `<tr${dim}>
+          <td><strong>${esc(m.name)}</strong><br><span class="mono small muted">${esc(m.type)}${m.enabled ? '' : ' · paused'}</span></td>
+          <td class="mono small">${esc(m.target)}${m.port ? ':' + m.port : ''}</td>
+          <td><span class="badge ${badge}">${esc(m.status)}</span>${detail}</td>
+          <td class="mono small">${m.latencyMs != null ? m.latencyMs + ' ms' : '—'}</td>
+          <td class="mono small">${fmtAgo(m.lastChecked)}</td>
+          <td class="mon-row-actions">
+            <button class="linkbtn" data-act="check" data-id="${m.id}">Check</button>
+            <button class="linkbtn" data-act="edit" data-id="${m.id}">Edit</button>
+            <button class="linkbtn" data-act="toggle" data-id="${m.id}" data-en="${m.enabled ? 0 : 1}">${m.enabled ? 'Pause' : 'Resume'}</button>
+            <button class="linkbtn danger" data-act="delete" data-id="${m.id}">Delete</button>
+          </td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+      wrap.innerHTML = html;
+    }
+
+    const ev = document.getElementById('dash-events');
+    if (d.events.length) {
+      let html = `<div class="card result-section"><h3>Recent events</h3><div class="dns-records">`;
+      for (const e of d.events) {
+        const cls = e.to === 'down' ? 'kv-val not-found' : 'kv-val found';
+        html += `<div class="dns-row"><span class="dns-type">${e.to === 'down' ? 'DOWN' : 'UP'}</span>
+          <span><strong>${esc(e.name)}</strong> <span class="muted">${esc(e.from || '?')} → ${esc(e.to)} · ${fmtAgo(e.ts)}</span></span></div>`;
+      }
+      html += `</div></div>`;
+      ev.innerHTML = html;
+    } else { ev.innerHTML = ''; }
+
+    // Browser notifications for newly-observed DOWN transitions.
+    const fresh = d.events.filter(e => e.id > lastSeenEventId);
+    if (d.events.length) lastSeenEventId = Math.max(lastSeenEventId, ...d.events.map(e => e.id));
+    if (dashPrimed && 'Notification' in window && Notification.permission === 'granted') {
+      for (const e of fresh.filter(e => e.to === 'down'))
+        new Notification('SecAnalysis — monitor down', { body: `${e.name} is DOWN` });
+    }
+    dashPrimed = true;
+  }
+
+  // Delegated actions for the monitor rows.
+  document.getElementById('dash-monitors').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = btn.dataset.id, dcopy = window.__dashMonitors || [];
+    if (btn.dataset.act === 'check') monitorAction(id, 'POST', '/check');
+    else if (btn.dataset.act === 'edit') editMonitor(dcopy.find(m => String(m.id) === String(id)));
+    else if (btn.dataset.act === 'toggle') toggleMonitor(id, btn.dataset.en === '1');
+    else if (btn.dataset.act === 'delete') {
+      if (confirm('Delete this monitor and its history?')) monitorAction(id, 'DELETE');
+    }
+  });
+
+  async function refreshDashboard() {
+    try {
+      const res = await fetch('/api/dashboard');
+      const d = await res.json();
+      window.__dashMonitors = d.monitors;
+      renderDashboard(d);
+    } catch (err) { /* transient; next tick retries */ }
+  }
+  document.getElementById('dash-refresh').addEventListener('click', refreshDashboard);
+
+  // Notifications opt-in
+  const notifyBtn = document.getElementById('notify-enable');
+  function syncNotifyBtn() {
+    notifyBtn.hidden = !('Notification' in window) || Notification.permission !== 'default';
+  }
+  notifyBtn.addEventListener('click', async () => {
+    try { await Notification.requestPermission(); } catch (e) {}
+    syncNotifyBtn();
+  });
+  syncNotifyBtn();
+
+  function setDashboardActive(active) {
+    if (active) {
+      refreshDashboard();
+      if (!dashTimer) dashTimer = setInterval(refreshDashboard, DASH_POLL_MS);
+    } else if (dashTimer) {
+      clearInterval(dashTimer); dashTimer = null;
+    }
+  }
+  </script>
+</body>
+</html>
