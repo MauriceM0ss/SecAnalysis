@@ -398,6 +398,170 @@ def test_console_cross_origin_blocked(client, spy_run):
     assert not spy_run
 
 
+# ── Router detection ───────────────────────────────────────────────────────
+# The whole point of detect_gateway is that our own default gateway is the wrong
+# answer on Docker's bridge network, so these drive it from canned traceroute
+# output rather than the network.
+def _trace(*lines):
+    return "traceroute to 1.1.1.1 (1.1.1.1), 5 hops max, 60 byte packets\n" + \
+           "".join(" %d  %s\n" % (i + 1, l) for i, l in enumerate(lines))
+
+
+@pytest.fixture
+def fake_trace(monkeypatch):
+    def install(output, own_gateway="172.21.0.1"):
+        class _Proc:
+            stdout, stderr, returncode = output, "", 0
+        monkeypatch.setattr(appmod.shutil, "which", lambda x: "/usr/bin/" + x)
+        monkeypatch.setattr(appmod.subprocess, "run", lambda argv, **kw: _Proc())
+        monkeypatch.setattr(appmod, "_own_default_gateway", lambda: own_gateway)
+    return install
+
+
+def test_detect_gateway_skips_the_docker_bridge(fake_trace):
+    # hop 1 is the bridge (i.e. the Docker host); the router is hop 2.
+    fake_trace(_trace("172.21.0.1  0.070 ms", "192.168.2.254  1.968 ms",
+                      "195.190.228.1  3.857 ms"))
+    info, err = appmod.detect_gateway()
+    assert err is None
+    assert info["ip"] == "192.168.2.254"
+    assert info["hop"] == 2
+    assert info["ownGateway"] == "172.21.0.1"   # reported, but not chosen
+
+
+def test_detect_gateway_on_host_networking(fake_trace):
+    # No bridge in the way: the router is hop 1 and our own gateway, and the
+    # same rule still picks it. This is why there's no "that's your own gateway,
+    # it might be the bridge" warning — here that would be a false alarm.
+    fake_trace(_trace("192.168.2.254  1.9 ms", "195.190.228.1  3.8 ms"),
+               own_gateway="192.168.2.254")
+    info, err = appmod.detect_gateway()
+    assert err is None and info["ip"] == "192.168.2.254" and info["hop"] == 1
+
+
+def test_detect_gateway_walks_past_silent_hops(fake_trace):
+    fake_trace(_trace("* * *", "192.168.2.254  1.9 ms", "195.190.228.1  3.8 ms"))
+    info, err = appmod.detect_gateway()
+    assert err is None and info["ip"] == "192.168.2.254"
+
+
+def test_detect_gateway_when_host_is_directly_public(fake_trace):
+    fake_trace(_trace("195.190.228.1  3.8 ms", "1.1.1.1  9.0 ms"))
+    info, err = appmod.detect_gateway()
+    assert info is None and "no router in front" in err
+
+
+def test_detect_gateway_reports_unusable_trace(fake_trace):
+    fake_trace("traceroute to 1.1.1.1 (1.1.1.1), 5 hops max, 60 byte packets\n")
+    info, err = appmod.detect_gateway()
+    assert info is None and err
+
+
+def test_router_endpoint_returns_gateway_and_dns(client, fake_trace, monkeypatch):
+    fake_trace(_trace("172.21.0.1  0.07 ms", "192.168.2.254  1.9 ms",
+                      "195.190.228.1  3.8 ms"))
+    monkeypatch.setattr(appmod, "resolve",
+                        lambda t: {"input": t, "ip": t, "hostname": "router.test",
+                                   "aliases": []})
+    d = client.get("/api/router").get_json()
+    assert d["ip"] == "192.168.2.254"
+    assert d["dns"]["hostname"] == "router.test"
+
+
+def test_router_endpoint_reports_failure(client, fake_trace):
+    fake_trace(_trace("195.190.228.1  3.8 ms"))
+    r = client.get("/api/router")
+    assert r.status_code == 502
+    assert "error" in r.get_json()
+
+
+def test_own_default_gateway_parses_proc_net_route(monkeypatch, tmp_path):
+    # Gateway is a little-endian hex u32: 010015AC -> 172.21.0.1
+    route = tmp_path / "route"
+    route.write_text(
+        "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n"
+        "eth0\t000015AC\t00000000\t0001\t0\t0\t0\t0000FFFF\n"
+        "eth0\t00000000\t010015AC\t0003\t0\t0\t0\t00000000\n")
+    real_open = open
+    monkeypatch.setattr("builtins.open",
+                        lambda p, *a, **k: real_open(route if p == "/proc/net/route" else p, *a, **k))
+    assert appmod._own_default_gateway() == "172.21.0.1"
+
+
+# ── Public IP ──────────────────────────────────────────────────────────────
+# _fetch_public_ip is the only part that talks to the network, so stubbing it
+# keeps these hermetic while still exercising the fallback/validation logic.
+#
+# The addresses below are globally routable ones (8.8.8.8 and friends) rather
+# than the usual RFC 5737 documentation ranges: the endpoint accepts an answer
+# only if ip_address().is_global, and 203.0.113.0/24 & 2001:db8::/32 are *not*
+# global. Nothing is ever contacted — they are only ever compared as strings.
+@pytest.fixture
+def fake_sources(monkeypatch):
+    """Drive get_public_ip from a {url: result} table. A result that is an
+    Exception is raised, mimicking a source being down or rate-limiting."""
+    def install(table, sources=None):
+        if sources is not None:
+            monkeypatch.setattr(appmod, "PUBLIC_IP_SOURCES", tuple(sources))
+        def fake_fetch(url, timeout=6):
+            got = table[url]
+            if isinstance(got, Exception):
+                raise got
+            return got
+        monkeypatch.setattr(appmod, "_fetch_public_ip", fake_fetch)
+        # rDNS is a real DNS call; keep it off the network too.
+        monkeypatch.setattr(appmod.socket, "gethostbyaddr",
+                            lambda ip: ("host.example.net", [], [ip]))
+    return install
+
+
+def test_public_ip_returns_address_and_context(client, fake_sources):
+    fake_sources({"u1": ("8.8.8.8", {"org": "Example ISP", "asn": "AS64496"})},
+                 [("src1", "u1")])
+    r = client.get("/api/public-ip")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ip"] == "8.8.8.8"
+    assert d["version"] == 4
+    assert d["source"] == "src1"
+    assert d["org"] == "Example ISP"
+    assert d["reverseDns"] == "host.example.net"
+
+
+def test_public_ip_falls_back_to_next_source(client, fake_sources):
+    fake_sources({"u1": OSError("down"), "u2": ("9.9.9.9", {})},
+                 [("src1", "u1"), ("src2", "u2")])
+    d = client.get("/api/public-ip").get_json()
+    assert d["ip"] == "9.9.9.9"
+    assert d["source"] == "src2"
+    assert d["failedSources"] == ["src1"]
+
+
+def test_public_ip_skips_non_global_and_junk_answers(client, fake_sources):
+    # A private address (proxy echoing an internal IP) and an HTML error page are
+    # both wrong answers, not the public IP — neither should be returned.
+    fake_sources({"u1": ("<html>rate limited</html>", {}),
+                  "u2": ("192.168.1.1", {}),
+                  "u3": ("1.1.1.1", {})},
+                 [("src1", "u1"), ("src2", "u2"), ("src3", "u3")])
+    d = client.get("/api/public-ip").get_json()
+    assert d["ip"] == "1.1.1.1"
+    assert d["failedSources"] == ["src1", "src2"]
+
+
+def test_public_ip_reports_total_failure(client, fake_sources):
+    fake_sources({"u1": OSError("down")}, [("src1", "u1")])
+    r = client.get("/api/public-ip")
+    assert r.status_code == 502
+    assert "error" in r.get_json()
+
+
+def test_public_ip_handles_ipv6(client, fake_sources):
+    fake_sources({"u1": ("2606:4700::1111", {})}, [("src1", "u1")])
+    d = client.get("/api/public-ip").get_json()
+    assert d["version"] == 6
+
+
 # ── Saved scans (shared engine: subnet + subdomains) ───────────────────────
 def _subnet_result(*ips, subnet="192.168.1.0/24"):
     return {"subnet": subnet, "count": len(ips), "command": "nmap -sn " + subnet, "stderr": "",

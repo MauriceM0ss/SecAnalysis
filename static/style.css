@@ -298,6 +298,9 @@ code {
 
 .dlg-foot { display: flex; justify-content: flex-end; gap: 10px;
   padding: 12px 20px 16px; border-top: 1px solid var(--border-soft); }
+/* Caption in a dialog footer: margin-right:auto pushes the buttons to the far
+   edge, so the note sits left and they stay right. */
+.dlg-note { font-size: .72rem; color: var(--text-muted); margin-right: auto; }
 
 /* ── Finding detail dialog (Repo Audit CVE / IaC) ───────────────────────────
    Like the settings dialog but grows with its content up to the viewport. */
@@ -416,7 +419,19 @@ code {
 .console-cmd:first-child { margin-top: 0; }
 .console-err { color: var(--danger); }
 .console-meta { color: var(--text-muted); font-size: .72rem; margin-bottom: 2px; }
-.console-note { font-size: .72rem; color: var(--text-muted); margin-right: auto; }
+
+/* ── Public IP dialog ───────────────────────────────────────────────────────
+   Just a kv-list, so it only needs a width that suits short values. */
+.pubip-dialog { width: 460px; }
+
+/* ── "Detect my router" row (Network Scan) ──────────────────────────────────
+   Sits under the target input; the note explains where the address came from
+   and wraps under the button on a narrow pane. */
+.detect-row { display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin-top: 10px; }
+.detect-note { font-size: .74rem; color: var(--text-muted);
+  font-family: var(--font-mono); }
+.detect-note.bad { color: var(--danger); }
 
 .finding-body-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
 .finding-meta { display: grid; grid-template-columns: max-content 1fr; gap: 7px 18px;

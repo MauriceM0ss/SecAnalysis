@@ -47,6 +47,15 @@
           <line x1="12" y1="15" x2="17" y2="15"></line>
         </svg>
       </button>
+      <button class="icon-btn" id="pubip-btn" type="button" title="Public IP address"
+              aria-label="Show public IP address" aria-haspopup="dialog">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="2" y1="12" x2="22" y2="12"></line>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+        </svg>
+      </button>
       <button class="icon-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings"
               aria-haspopup="dialog">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
@@ -145,6 +154,13 @@
             <input type="text" id="target" name="target" autocomplete="off" spellcheck="false"
                    placeholder="192.168.1.10  or  host.local" required>
             <button type="submit" id="scan-btn" class="btn-primary">Scan</button>
+          </div>
+          <!-- Fills the target with the router this host sits behind, so you can
+               scan it without knowing its address. The scan itself is an ordinary
+               one — every option below still applies. -->
+          <div class="detect-row">
+            <button type="button" class="btn-secondary" id="detect-router-btn">Detect my router</button>
+            <span class="detect-note" id="detect-router-note"></span>
           </div>
 
           <div class="form-cols">
@@ -545,6 +561,12 @@
         result shows the name and the address whichever you type.</dd>
       <dt>Scan</dt>
       <dd>Runs the scan. Long scans can be left running while you use other tools.</dd>
+      <dt>Detect my router</dt>
+      <dd>Fills in the address of the router this app sits behind, so you can scan it
+        without knowing it. It's found by tracing a route outward and taking the last
+        hop still inside private address space — the note shows which hop it picked.
+        On Docker's default bridge network hop&nbsp;1 is the Docker host, so your
+        router is usually hop&nbsp;2. Nothing is scanned until you press Scan.</dd>
     </dl>
     <h4>Port range</h4>
     <dl class="help-list">
@@ -861,7 +883,7 @@
                 aria-label="Note"></textarea>
     </div>
     <div class="dlg-foot">
-      <span class="console-note" id="note-meta"></span>
+      <span class="dlg-note" id="note-meta"></span>
       <button class="btn-secondary" id="note-cancel" type="button">Cancel</button>
       <button class="btn-primary" id="note-save" type="button">Save note</button>
     </div>
@@ -917,8 +939,30 @@
       <pre class="console-out" id="console-out" tabindex="0" aria-live="polite"></pre>
     </div>
     <div class="dlg-foot">
-      <span class="console-note">Fixed tool list · flags are set server-side · target only</span>
+      <span class="dlg-note">Fixed tool list · flags are set server-side · target only</span>
       <button class="btn-secondary" id="console-cancel" type="button">Close</button>
+    </div>
+  </dialog>
+
+  <!-- Public IP: the address this container leaves the network from, i.e. the
+       WAN side of the router it sits behind. Filled in on open. -->
+  <dialog class="finding-dialog pubip-dialog" id="pubip-dialog" aria-labelledby="pubip-title">
+    <div class="dlg-head">
+      <h2 id="pubip-title">Public IP address</h2>
+      <button class="icon-btn dlg-x" id="pubip-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <div id="pubip-body" aria-live="polite"></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="dlg-note">The WAN address of the router this app sits behind</span>
+      <button class="btn-secondary" id="pubip-refresh" type="button">Refresh</button>
+      <button class="btn-secondary" id="pubip-cancel" type="button">Close</button>
     </div>
   </dialog>
 
@@ -1269,6 +1313,42 @@ body{height:auto;overflow:auto;padding:28px;}
   const scanBtn = document.getElementById('scan-btn');
   const scanStatus = document.getElementById('scan-status');
   const scanResults = document.getElementById('scan-results');
+
+  // ── Detect my router ─────────────────────────────────────────────────────
+  // Fills the target with the gateway the server found by tracing outward (see
+  // detect_gateway in app.py). It only fills the field — scanning stays a
+  // deliberate second click, and is the ordinary scan with the options below.
+  const detectBtn = document.getElementById('detect-router-btn');
+  const detectNote = document.getElementById('detect-router-note');
+  let detectBusy = false;
+
+  detectBtn.addEventListener('click', async () => {
+    if (detectBusy) return;
+    detectBusy = true;
+    detectBtn.disabled = true;
+    detectNote.className = 'detect-note';
+    detectNote.textContent = 'Tracing…';
+    try {
+      const res = await fetch('/api/router');
+      const d = await res.json();
+      if (!res.ok || d.error) {
+        detectNote.className = 'detect-note bad';
+        detectNote.textContent = d.error || 'Could not find a router.';
+        return;
+      }
+      document.getElementById('target').value = d.ip;
+      const name = d.dns && d.dns.hostname;
+      // Say where it came from: on bridge networking hop 1 is the Docker host,
+      // so "hop 2" is the honest answer to "why that address?".
+      detectNote.textContent = `${name ? name + ' · ' : ''}hop ${d.hop} — press Scan`;
+    } catch (err) {
+      detectNote.className = 'detect-note bad';
+      detectNote.textContent = `Network error: ${err.message}`;
+    } finally {
+      detectBusy = false;
+      detectBtn.disabled = false;
+    }
+  });
 
   scanForm.addEventListener('submit', async e => {
     e.preventDefault();
@@ -2772,6 +2852,60 @@ body{height:auto;overflow:auto;padding:28px;}
   });
   document.getElementById('console-close').addEventListener('click', () => consoleDialog.close());
   document.getElementById('console-cancel').addEventListener('click', () => consoleDialog.close());
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Public IP
+  // ══════════════════════════════════════════════════════════════════════
+  // The WAN address can't be seen from inside the LAN, so the server asks an
+  // external echo service and we render whatever context it returned along with
+  // it (see PUBLIC_IP_SOURCES in app.py). Looked up fresh on every open: the
+  // whole point is the address as it is right now.
+  const pubipDialog = document.getElementById('pubip-dialog');
+  const pubipBody = document.getElementById('pubip-body');
+  const pubipRefresh = document.getElementById('pubip-refresh');
+  let pubipBusy = false;
+
+  function pubipRow(name, value, cls) {
+    return `<div class="kv-row"><span class="kv-name">${esc(name)}</span>
+      <span class="kv-val ${cls || ''}">${esc(value)}</span></div>`;
+  }
+
+  async function loadPublicIp() {
+    if (pubipBusy) return;
+    pubipBusy = true;
+    pubipRefresh.disabled = true;
+    pubipBody.innerHTML = `<p class="hint">Looking up…</p>`;
+    try {
+      const res = await fetch('/api/public-ip');
+      const d = await res.json();
+      if (!res.ok || d.error) {
+        pubipBody.innerHTML = `<p class="kv-val not-found">${esc(d.error || 'Lookup failed.')}</p>`;
+        return;
+      }
+      const place = [d.city, d.country].filter(Boolean).join(', ');
+      let html = `<div class="kv-list">`;
+      html += pubipRow(`IPv${d.version} address`, d.ip, 'found');
+      if (d.reverseDns) html += pubipRow('Reverse DNS', d.reverseDns);
+      if (d.org) html += pubipRow('Network', d.asn ? `${d.org} (${d.asn})` : d.org);
+      if (place) html += pubipRow('Location', place);
+      html += pubipRow('Reported by', d.source);
+      html += `</div>`;
+      pubipBody.innerHTML = html;
+    } catch (err) {
+      pubipBody.innerHTML = `<p class="kv-val not-found">Network error: ${esc(err.message)}</p>`;
+    } finally {
+      pubipBusy = false;
+      pubipRefresh.disabled = false;
+    }
+  }
+
+  document.getElementById('pubip-btn').addEventListener('click', () => {
+    pubipDialog.showModal();
+    loadPublicIp();
+  });
+  pubipRefresh.addEventListener('click', loadPublicIp);
+  document.getElementById('pubip-close').addEventListener('click', () => pubipDialog.close());
+  document.getElementById('pubip-cancel').addEventListener('click', () => pubipDialog.close());
 
   // ══════════════════════════════════════════════════════════════════════
   //  History (saved reports)
