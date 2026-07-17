@@ -94,6 +94,12 @@ things in the top bar.
 - **SBOM** (`trivy`) — a downloadable CycloneDX bill of materials.
 - **Dockerfile lint** (`hadolint`) and **GitHub Actions audit** (`zizmor`,
   offline) — `pull_request_target` abuse, unpinned actions, token over-scoping.
+- **Repo posture** — supply-chain and hygiene checks read from the clone: which
+  ecosystems Dependabot *doesn't* cover, missing lockfiles, credential files that
+  shouldn't be tracked, absent `SECURITY.md` / `CODEOWNERS` / `LICENSE`. Needs no
+  token and no privileged access; the checks that would need org admin (branch
+  protection, secret scanning, alert counts) are **listed as unassessed** rather
+  than silently skipped.
 - **Remote or local** — audit a `github.com`/`gitlab.com` URL (shallow clone), or
   a repo you've cloned yourself. Private GitHub repos work by URL once you set a
   token. See [Auditing private repos](#auditing-private-repos).
@@ -139,7 +145,12 @@ Two different things, and the difference matters:
 - **Report history** (menu → Saved Reports) — freezes a result as a
   self-contained HTML file on the data volume. Good for "this is what it looked
   like on the day". Served back with a locked-down CSP so a stored report can
-  never run scripts. Available for every tool.
+  never run scripts. Available for every tool. Each entry also stores the run's
+  **raw findings** beside the HTML as `<report>.json`, readable at
+  `GET /api/history/<tool>/<report>.html/data` (add `?download=1` to save it).
+  The HTML is what you read; the JSON is what a later audit can be diffed
+  against — findings not recorded on the day can't be reconstructed afterwards.
+  Reports saved before this existed have no JSON and report `hasData: false`.
 - **Saved scans** (Subnet Scan and Subdomain Finder) — stores the tool's own
   result data, so reopening it re-renders through the normal UI with every
   button still working. **Refresh** re-runs the tool against the same target and

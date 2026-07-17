@@ -31,7 +31,8 @@ from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 # Cap request bodies so no endpoint can be used to exhaust memory. The largest
-# legitimate body is a saved report (MAX_REPORT_BYTES, 8 MB) plus JSON overhead.
+# legitimate body is a saved report (MAX_REPORT_BYTES, 8 MB) travelling with its
+# structured findings (MAX_DATA_BYTES, 4 MB), plus JSON overhead.
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 APP_VERSION = "1.0"
@@ -1677,6 +1678,308 @@ def audit_actions(repo_dir: str) -> list:
     return findings
 
 
+# ── Repo posture (Tier 0) ────────────────────────────────────────────────────
+# Everything here is read from the clone we already have: no GitHub API, no
+# token, no privileged access. That's the point — posture questions that need
+# admin (branch protection, whether secret scanning is enabled, Dependabot alert
+# contents, 2FA) are listed in POSTURE_UNASSESSED rather than silently omitted,
+# so a report says plainly what it could not see.
+POSTURE_UNASSESSED = [
+    "Branch protection / rulesets on the default branch",
+    "Secret scanning and push protection enabled",
+    "Dependabot alerts enabled, and how many are open",
+    "Actions default GITHUB_TOKEN permissions",
+    "Two-factor enforcement, outside collaborators, deploy keys",
+]
+
+# Manifest / lockfile names per Dependabot package-ecosystem key.
+_ECOSYSTEMS = {
+    "npm":      {"manifests": {"package.json"},
+                 "locks": {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json"}},
+    "pip":      {"manifests": {"requirements.txt", "pyproject.toml", "pipfile", "setup.py"},
+                 "locks": {"poetry.lock", "pipfile.lock", "pdm.lock", "uv.lock", "requirements.lock"}},
+    "gomod":    {"manifests": {"go.mod"}, "locks": {"go.sum"}},
+    "bundler":  {"manifests": {"gemfile"}, "locks": {"gemfile.lock"}},
+    "maven":    {"manifests": {"pom.xml"}, "locks": set()},
+    "gradle":   {"manifests": {"build.gradle", "build.gradle.kts"}, "locks": {"gradle.lockfile"}},
+    "cargo":    {"manifests": {"cargo.toml"}, "locks": {"cargo.lock"}},
+    "composer": {"manifests": {"composer.json"}, "locks": {"composer.lock"}},
+    "mix":      {"manifests": {"mix.exs"}, "locks": {"mix.lock"}},
+    "pub":      {"manifests": {"pubspec.yaml"}, "locks": {"pubspec.lock"}},
+}
+# Ecosystems identified by extension rather than an exact filename.
+_ECOSYSTEM_SUFFIX = {"nuget": (".csproj", ".vbproj", ".fsproj"), "terraform": (".tf",)}
+
+# Directories that aren't the repo's own source. node_modules especially: a local
+# clone is a working tree, and every package in there carries a package.json that
+# would otherwise be read as a manifest of this repo.
+_POSTURE_SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__",
+                      ".tox", ".mypy_cache", ".pytest_cache", "site-packages",
+                      ".next", ".gradle", ".terraform", "bower_components"}
+
+# Committed files that are secrets by nature, not by content — gitleaks reads
+# what's inside a file, this notices the file shouldn't be tracked at all.
+_SECRET_NAMES = {".env", ".env.local", ".env.prod", ".env.production", ".env.dev",
+                 ".env.development", ".env.staging", "id_rsa", "id_dsa", "id_ecdsa",
+                 "id_ed25519", ".netrc", "_netrc", ".htpasswd"}
+_SECRET_SUFFIX = (".p12", ".pfx", ".jks", ".keystore", ".ppk")
+# Files whose *name* proves nothing — .npmrc is usually registry config like
+# "package-lock=false", and only sometimes holds an _authToken. Checked by
+# content instead, because flagging every .npmrc is how a tool trains its user
+# to ignore it.
+_CONFIG_MAYBE_AUTH = {".npmrc", ".pypirc", ".netrc"}
+_AUTH_LINE_RE = re.compile(r"_auth(?:token)?\s*=|_password\s*=|^\s*password\s*[=:]", re.I | re.M)
+# Test fixtures are the main source of committed key material, and a fixture key
+# is deliberate, published, and worthless. Still worth listing — people do hide
+# real keys in test dirs — but not at the severity of a live credential.
+_FIXTURE_DIRS = {"test", "tests", "testdata", "test_data", "fixtures", "__fixtures__",
+                 "spec", "specs", "__tests__", "e2e", "mock", "mocks", "examples",
+                 "example", "testing", "demo", "sample", "samples"}
+# Key/cert extensions that are frequently public (CA bundles, cert chains, public
+# keys), so presence alone is a weaker signal than the names above.
+_MAYBE_SECRET_SUFFIX = (".pem", ".key", ".crt", ".cer")
+# ".env.example" and friends exist precisely so the real .env doesn't get committed.
+_SECRET_EXEMPT = (".example", ".sample", ".template", ".dist", ".dummy", ".test", ".pub")
+
+# Reads dependabot.yml without a YAML parser — pulling in a dependency for one
+# key in one small file isn't worth it. A commented-out block won't match: '#'
+# can't appear where this expects '-' or the key itself.
+_DEPENDABOT_ECOSYSTEM_RE = re.compile(
+    r'^\s*-?\s*package-ecosystem:\s*["\']?([\w-]+)["\']?', re.M)
+
+
+def _posture_tree(repo_dir: str, cap: int = 20000) -> list:
+    """Repo-relative paths to assess: what git tracks, not what's on disk.
+
+    The distinction is the whole ballgame for a local clone, which is a working
+    tree full of files git deliberately ignores. Reporting an ignored .env as
+    committed would be the worst kind of false alarm — it tells someone to treat
+    a credential as compromised when it never left their laptop. Only the index
+    says what's actually in the repo. Falls back to a walk for a non-git tree
+    (an exported tarball), where every file present is by definition part of it.
+    """
+    paths = []
+    if os.path.isdir(os.path.join(repo_dir, ".git")):
+        try:
+            proc = subprocess.run(["git", "-C", repo_dir, "ls-files", "-z"],
+                                  capture_output=True, text=True, timeout=60)
+            if proc.returncode == 0:
+                paths = [p for p in proc.stdout.split("\0") if p]
+        except (subprocess.SubprocessError, OSError):
+            paths = []
+    if not paths:
+        for root, dirs, files in os.walk(repo_dir):
+            dirs[:] = [d for d in dirs if d not in _POSTURE_SKIP_DIRS]
+            for fn in files:
+                paths.append(os.path.relpath(os.path.join(root, fn), repo_dir).replace(os.sep, "/"))
+                if len(paths) >= cap:
+                    return paths
+        return paths
+    # Committed vendor/build dirs are rare but real; their manifests aren't this
+    # repo's, so drop them either way.
+    keep = [p for p in paths
+            if not any(seg in _POSTURE_SKIP_DIRS for seg in p.split("/")[:-1])]
+    return keep[:cap]
+
+
+def _is_fixture(path: str) -> bool:
+    """Does this path live under a test/example directory?"""
+    return any(seg.lower() in _FIXTURE_DIRS for seg in path.split("/")[:-1])
+
+
+def _has_auth_material(repo_dir: str, rel: str) -> bool:
+    try:
+        with open(os.path.join(repo_dir, rel), errors="replace") as fh:
+            return bool(_AUTH_LINE_RE.search(fh.read(20000)))
+    except OSError:
+        return False
+
+
+def _doc_present(lower_paths: set, *stems: str) -> bool:
+    """GitHub looks for community docs in the root, .github/ and docs/."""
+    for stem in stems:
+        for folder in ("", ".github/", "docs/"):
+            for ext in (".md", ".rst", ".txt", ""):
+                if f"{folder}{stem}{ext}" in lower_paths:
+                    return True
+    return False
+
+
+def audit_posture(repo_dir: str) -> dict:
+    """Tier 0 repo posture: hygiene and supply-chain coverage read from the tree.
+
+    Returns {"findings": [...], "unassessed": [...]}. Findings mirror the shape
+    the other scanners return so they render and filter like any other section.
+    """
+    findings = []
+
+    def add(fid, check, severity, title, detail, path=""):
+        findings.append({"id": fid, "check": check, "severity": severity,
+                         "title": title, "detail": detail, "file": path})
+
+    paths = _posture_tree(repo_dir)
+    lower = {p.lower() for p in paths}
+    basenames = {}
+    for p in paths:
+        basenames.setdefault(os.path.basename(p).lower(), []).append(p)
+
+    # ── Which ecosystems does this repo actually have? ───────────────────────
+    present = {}
+    for eco, spec in _ECOSYSTEMS.items():
+        hits = [p for name in spec["manifests"] for p in basenames.get(name, [])]
+        if hits:
+            present[eco] = hits
+    for eco, suffixes in _ECOSYSTEM_SUFFIX.items():
+        hits = [p for p in paths if p.lower().endswith(suffixes)]
+        if hits:
+            present[eco] = hits
+    if any(p.lower() == "dockerfile" or "/dockerfile" in p.lower()
+           or p.lower().endswith(".dockerfile") for p in paths):
+        present["docker"] = ["Dockerfile"]
+    if any(p.lower().startswith(".github/workflows/") for p in paths):
+        present["github-actions"] = [".github/workflows"]
+
+    # ── Dependabot coverage ──────────────────────────────────────────────────
+    # Renovate does the same job; a repo using it isn't missing anything.
+    renovate = any(n in basenames for n in
+                   ("renovate.json", "renovate.json5", ".renovaterc", ".renovaterc.json"))
+    cfg_path = next((p for p in (".github/dependabot.yml", ".github/dependabot.yaml")
+                     if p in lower), None)
+    if cfg_path:
+        try:
+            with open(os.path.join(repo_dir, cfg_path), errors="replace") as fh:
+                cfg = fh.read()
+        except OSError:
+            cfg = ""
+        covered = {m.lower() for m in _DEPENDABOT_ECOSYSTEM_RE.findall(cfg)}
+        # The finding that motivates this whole section: Dependabot is on, looks
+        # healthy, reports nothing for an ecosystem it was never told about — so
+        # nobody notices the blind spot.
+        gaps = sorted(set(present) - covered)
+        if gaps:
+            add("POSTURE-001", "Dependabot coverage", "high",
+                f"Dependabot doesn't cover {', '.join(gaps)}",
+                f"{cfg_path} configures {', '.join(sorted(covered)) or 'nothing'}, but the repo "
+                f"also uses {', '.join(gaps)}. Those ecosystems get no update PRs and no alerts "
+                f"from version updates — silently, because Dependabot is enabled and reporting "
+                f"on the rest. Add a block per ecosystem.", cfg_path)
+    elif renovate:
+        add("POSTURE-004", "Dependency updates", "informational",
+            "Renovate in use instead of Dependabot",
+            "No .github/dependabot.yml, but a Renovate config is present — dependency updates "
+            "are presumably handled there. Renovate's own coverage isn't checked here.")
+    elif present:
+        add("POSTURE-004", "Dependency updates", "medium",
+            "No Dependabot configuration",
+            f"No .github/dependabot.yml, and the repo uses {', '.join(sorted(present))}. "
+            f"Automated dependency updates are off unless they're configured at org level "
+            f"(which this check can't see).", ".github/dependabot.yml")
+
+    # ── Lockfiles ────────────────────────────────────────────────────────────
+    for eco, spec in _ECOSYSTEMS.items():
+        if eco not in present or not spec["locks"]:
+            continue
+        if not any(name in basenames for name in spec["locks"]):
+            # Deliberately low: a *library* is supposed to resolve versions at
+            # install time and usually omits its lockfile on purpose, and we
+            # can't reliably tell a library from an application here. Real
+            # signal for a deployable, noise for everything on PyPI or npm —
+            # so it reports rather than accuses.
+            add("POSTURE-005", "Dependency pinning", "low",
+                f"No lockfile for {eco}",
+                f"{eco} manifests found ({', '.join(sorted(set(present[eco]))[:3])}) but no "
+                f"{' / '.join(sorted(spec['locks']))}. For a deployable this means builds aren't "
+                f"reproducible and a scan doesn't describe what actually ships. For a published "
+                f"library it's the expected convention — ignore it there.",
+                sorted(set(present[eco]))[0])
+
+    # ── Files that shouldn't be tracked at all ───────────────────────────────
+    # gitleaks reads what's *inside* a file; this notices files that shouldn't be
+    # in the repo at all, whatever they contain.
+    key_material = []
+    for p in paths:
+        base = os.path.basename(p).lower()
+        if any(x in base for x in _SECRET_EXEMPT):
+            continue
+        fixture = _is_fixture(p)
+        if base in _CONFIG_MAYBE_AUTH:
+            if _has_auth_material(repo_dir, p):
+                add("POSTURE-002", "Committed credentials", "high",
+                    f"{os.path.basename(p)} contains an auth token",
+                    "This file is normally harmless registry/config, but this one carries "
+                    "credentials. Rotate it — removing the file doesn't remove it from history.", p)
+        elif base in _SECRET_NAMES or base.endswith(_SECRET_SUFFIX):
+            add("POSTURE-002", "Committed credentials", "medium" if fixture else "high",
+                f"{os.path.basename(p)} is tracked in the repo",
+                ("Under a test/example path, so most likely a fixture — confirm before acting. "
+                 if fixture else
+                 "This file holds credentials or private key material by convention. ")
+                + "Treat anything real in it as compromised and rotate it — removing the file "
+                  "doesn't remove it from history. Add it to .gitignore.", p)
+        elif base.endswith(_MAYBE_SECRET_SUFFIX):
+            key_material.append((p, fixture))
+
+    # Certificate/key material, capped: a repo with a big fixture tree would
+    # otherwise bury every other finding under near-identical rows.
+    for p, fixture in key_material[:10]:
+        add("POSTURE-003", "Key material", "informational" if fixture else "medium",
+            f"{os.path.basename(p)} is tracked in the repo",
+            ("Under a test/example path — test certificates are deliberate and published, so "
+             "this is almost certainly fine. Listed because a real key does occasionally hide "
+             "in a fixture tree."
+             if fixture else
+             "Key or certificate material. Often legitimately public (a CA bundle, a cert chain, "
+             "a public key) — confirm it isn't a private key before acting."), p)
+    if len(key_material) > 10:
+        add("POSTURE-003", "Key material", "informational",
+            f"{len(key_material) - 10} further key/certificate files not listed",
+            "Output capped at 10 to keep the section readable.")
+
+    # ── .gitignore hygiene ───────────────────────────────────────────────────
+    if ".gitignore" in lower:
+        try:
+            with open(os.path.join(repo_dir, ".gitignore"), errors="replace") as fh:
+                ignored = fh.read().lower()
+        except OSError:
+            ignored = ""
+        missing = [pat for pat in (".env", "*.pem", "*.key", "id_rsa") if pat not in ignored]
+        if missing:
+            add("POSTURE-009", "Ignore rules", "low",
+                f".gitignore doesn't cover {', '.join(missing)}",
+                "Nothing stops these being committed by accident. This is about the next mistake, "
+                "not a current finding — a clean tree today says nothing about tomorrow.",
+                ".gitignore")
+    elif paths:
+        add("POSTURE-009", "Ignore rules", "low", "No .gitignore",
+            "Nothing stops build output or local credential files being committed by accident.")
+
+    # ── Community / OSS hygiene ──────────────────────────────────────────────
+    # Severity here genuinely depends on whether the repo is public, which a clone
+    # can't tell us — so these stay informational rather than crying wolf on an
+    # internal repo. Tier 1 (repo metadata) is what promotes them.
+    if not _doc_present(lower, "security"):
+        add("POSTURE-006", "Disclosure route", "informational", "No SECURITY.md",
+            "No documented way to report a vulnerability, so reports arrive as public issues or "
+            "not at all. Matters most on a public repo — severity can't be judged from a clone "
+            "alone, since visibility isn't visible here.")
+    if not _doc_present(lower, "license", "licence", "copying"):
+        add("POSTURE-007", "Licensing", "informational", "No LICENSE file",
+            "Without a licence, default copyright applies and nobody may legally reuse the code. "
+            "Matters most on a public repo; visibility isn't knowable from a clone.")
+    if not _doc_present(lower, "codeowners"):
+        add("POSTURE-008", "Review ownership", "low", "No CODEOWNERS",
+            "No declared owner, so review can't be routed automatically and required-reviewer "
+            "rules have nothing to key off. Whether review is actually enforced needs branch "
+            "protection, which isn't readable without admin.", ".github/CODEOWNERS")
+    for stem, label in (("readme", "README"), ("contributing", "CONTRIBUTING"),
+                        ("code_of_conduct", "CODE_OF_CONDUCT")):
+        if not _doc_present(lower, stem):
+            add("POSTURE-010", "Community docs", "informational", f"No {label}",
+                f"{label} is absent. Community-health signal; no direct security impact.")
+
+    return {"findings": findings, "unassessed": list(POSTURE_UNASSESSED)}
+
+
 def scan_path(repo_dir: str) -> dict:
     """Run every scanner against a directory. The gitleaks report goes to a
     throwaway temp dir, so this works even when repo_dir is mounted read-only."""
@@ -1690,6 +1993,7 @@ def scan_path(repo_dir: str) -> dict:
         "licenses": trivy["licenses"],
         "dockerfile": lint_dockerfiles(repo_dir),
         "actions": audit_actions(repo_dir),
+        "posture": audit_posture(repo_dir),
         "sbom": generate_sbom(repo_dir),
     }
 
@@ -2102,6 +2406,7 @@ def repo_audit():
         "licenses": result["licenses"],
         "dockerfile": result["dockerfile"],
         "actions": result["actions"],
+        "posture": result["posture"],
         "sbom": result["sbom"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
@@ -2330,6 +2635,12 @@ CHECK_TYPES = ("http", "tcp", "icmp", "api")
 HISTORY_DIR = os.environ.get("HISTORY_DIR", os.path.join(os.path.dirname(DB_PATH) or ".", "history"))
 REPORT_TOOLS = ("netscan", "subnet", "url", "exposure", "repo", "subdomains")
 MAX_REPORT_BYTES = 8 * 1024 * 1024
+# Structured findings stored next to each report, as <report>.json. The HTML is
+# for reading; this is the same run as data, so a later audit can be diffed
+# against it. Kept well inside MAX_CONTENT_LENGTH's headroom over the 8 MB report
+# it travels with. A payload over this is dropped rather than failing the save —
+# losing the report to protect the sidecar would be the wrong trade.
+MAX_DATA_BYTES = 4 * 1024 * 1024
 _SLUG_RE = re.compile(r"[^a-z0-9.-]+")
 
 _SCHEMA = """
@@ -2367,6 +2678,10 @@ CREATE TABLE IF NOT EXISTS events (
   to_status TEXT NOT NULL,
   name TEXT
 );
+-- One row per saved report. The rendered HTML lives on the volume as `filename`;
+-- when the front end also sent the run's raw findings, they sit beside it as the
+-- same name with a .json suffix and `data_size` is the size of that sidecar
+-- (NULL means there isn't one — every report saved before this existed).
 CREATE TABLE IF NOT EXISTS history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tool TEXT NOT NULL,
@@ -2374,6 +2689,7 @@ CREATE TABLE IF NOT EXISTS history (
   target TEXT,
   label TEXT,
   size INTEGER,
+  data_size INTEGER,
   created_at TEXT NOT NULL
 );
 -- Saved scans, one row per saved result of any tool that supports saving (see
@@ -2430,6 +2746,11 @@ def init_db():
         cols = [r[1] for r in conn.execute("PRAGMA table_info(history)").fetchall()]
         if "label" not in cols:
             conn.execute("ALTER TABLE history ADD COLUMN label TEXT")
+        # Migration: reports used to be archived as rendered HTML only. Existing
+        # rows keep data_size NULL — that history is HTML and always will be,
+        # since the findings behind it weren't recorded at the time.
+        if "data_size" not in cols:
+            conn.execute("ALTER TABLE history ADD COLUMN data_size INTEGER")
 
         # Migration: saved scans began as a subnet-only feature, so the first
         # version of these tables was named for subnets (cidr / ip / new_ips /
@@ -2479,6 +2800,13 @@ def _resolve_history_file(tool: str, name: str):
     return path
 
 
+def _history_data_path(html_path: str) -> str:
+    """The structured sidecar for a stored report. Derived from a path that
+    _resolve_history_file has already validated, so it inherits that safety —
+    it is never built from user input directly."""
+    return html_path[:-len(".html")] + ".json"
+
+
 @app.route("/api/history", methods=["GET"])
 def history_list():
     tool = request.args.get("tool")
@@ -2493,7 +2821,7 @@ def history_list():
         conn.close()
     items = [{"id": r["id"], "tool": r["tool"], "filename": r["filename"],
               "target": r["target"], "label": r["label"], "size": r["size"],
-              "createdAt": r["created_at"]}
+              "hasData": r["data_size"] is not None, "createdAt": r["created_at"]}
              for r in rows]
     return jsonify({"items": items, "tools": REPORT_TOOLS})
 
@@ -2519,15 +2847,32 @@ def history_add():
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(html)
     size = os.path.getsize(path)
+
+    # The same run as data, beside the report. Best-effort by design: the report
+    # is the thing the user asked to save, so a sidecar that can't be written
+    # doesn't take the save down with it.
+    data_size = None
+    payload = data.get("data")
+    if isinstance(payload, (dict, list)):
+        try:
+            blob = json.dumps(payload, separators=(",", ":"))
+            if len(blob.encode("utf-8")) <= MAX_DATA_BYTES:
+                with open(_history_data_path(path), "w", encoding="utf-8") as fh:
+                    fh.write(blob)
+                data_size = os.path.getsize(_history_data_path(path))
+        except (TypeError, ValueError, OSError) as e:
+            app.logger.warning("history sidecar not written for %s: %s", fname, e)
+
     conn = get_db()
     try:
-        conn.execute("INSERT INTO history (tool, filename, target, size, created_at) "
-                     "VALUES (?,?,?,?,?)", (tool, fname, target, size, ts.isoformat()))
+        conn.execute("INSERT INTO history (tool, filename, target, size, data_size, created_at) "
+                     "VALUES (?,?,?,?,?,?)", (tool, fname, target, size, data_size, ts.isoformat()))
         conn.commit()
     finally:
         conn.close()
-    return jsonify({"ok": True, "tool": tool, "filename": fname,
-                    "target": target, "size": size, "createdAt": ts.isoformat()})
+    return jsonify({"ok": True, "tool": tool, "filename": fname, "target": target,
+                    "size": size, "hasData": data_size is not None,
+                    "createdAt": ts.isoformat()})
 
 
 @app.route("/api/history/<tool>/<path:name>", methods=["GET"])
@@ -2544,6 +2889,26 @@ def history_get(tool, name):
                                                "img-src data:; font-src data:")
     if request.args.get("download"):
         resp.headers["Content-Disposition"] = 'attachment; filename="%s"' % os.path.basename(path)
+    return resp
+
+
+@app.route("/api/history/<tool>/<path:name>/data", methods=["GET"])
+def history_data(tool, name):
+    """The stored run's raw findings. This is the machine-readable half of a
+    saved report — what a diff between two audits reads."""
+    path = _resolve_history_file(tool, name)
+    if not path:
+        return jsonify({"error": "Invalid path"}), 400
+    dpath = _history_data_path(path)
+    if not os.path.isfile(dpath):
+        return jsonify({"error": "No structured data stored for this report — it was "
+                                 "saved before findings were archived as data."}), 404
+    with open(dpath, "r", encoding="utf-8") as fh:
+        blob = fh.read()
+    resp = app.response_class(blob, mimetype="application/json")
+    if request.args.get("download"):
+        resp.headers["Content-Disposition"] = ('attachment; filename="%s"'
+                                               % os.path.basename(dpath))
     return resp
 
 
@@ -2572,6 +2937,11 @@ def history_delete(tool, name):
         return jsonify({"error": "Invalid path"}), 400
     if os.path.isfile(path):
         os.remove(path)
+    # The sidecar is part of the entry, not a separate artifact — deleting a
+    # report must not leave its findings orphaned on the volume.
+    dpath = _history_data_path(path)
+    if os.path.isfile(dpath):
+        os.remove(dpath)
     conn = get_db()
     try:
         conn.execute("DELETE FROM history WHERE tool=? AND filename=?",

@@ -1147,6 +1147,25 @@
     repo:       { name: 'Repo Audit',     resultsId: 'repo-results' },   // target: see toolTarget
     subdomains: { name: 'Subdomains',     resultsId: 'subdomains-results', targetId: 'subdomains-domain' },
   };
+  // The payload each tool's endpoint last returned, kept so "Add to history" can
+  // archive the run as data and not only as rendered HTML. A report is for
+  // reading; this is what a later audit can be diffed against. Recorded at
+  // render time because that's the one moment every tool has its raw result in
+  // hand — and findings not written down on the day can't be recovered later.
+  const lastResults = {};
+
+  // What actually gets archived. The SBOM *document* is dropped: it's by far the
+  // largest thing in an audit, it isn't a finding, and re-running the audit
+  // regenerates it — whereas the findings as they stood on the day are gone for
+  // good if not recorded. Its summary stays, and the HTML report never contained
+  // the document either (buildReportDoc strips the download button), so the two
+  // halves of an entry agree on what they hold.
+  function historyPayload(tool, data) {
+    if (tool !== 'repo' || !data || !data.sbom) return data;
+    const { document: _drop, ...sbom } = data.sbom;
+    return { ...data, sbom };
+  }
+
   // What a report names as its target. Usually the tool's input field, but Repo
   // Audit accepts either a URL or a local clone from a picker, so `targetId`
   // alone reports "—" for every local audit. It uses the source the server said
@@ -1290,7 +1309,8 @@ body{height:auto;overflow:auto;padding:28px;}
     try {
       const res = await fetch('/api/history', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tool, target, html: built.doc }) });
+        body: JSON.stringify({ tool, target, html: built.doc,
+                               data: historyPayload(tool, lastResults[tool]) }) });
       const d = await res.json();
       if (!res.ok || d.error) throw new Error(d.error || 'Save failed');
       if (btn) { btn.textContent = 'Added ✓'; setTimeout(() => { btn.textContent = restore; btn.disabled = false; }, 1500); }
@@ -1338,6 +1358,7 @@ body{height:auto;overflow:auto;padding:28px;}
     { key: 'licenses',          name: 'License Risks' },
     { key: 'dockerfile',        name: 'Dockerfile Lint' },
     { key: 'actions',           name: 'GitHub Actions Audit' },
+    { key: 'posture',           name: 'Repo Posture' },
     { key: 'sbom',              name: 'SBOM' },
   ];
   const reportDialog = document.getElementById('report-dialog');
@@ -1536,6 +1557,7 @@ body{height:auto;overflow:auto;padding:28px;}
   }
 
   function renderScan(data) {
+    lastResults.netscan = data;
     scanStatus.hidden = true;
     const { dns, result, command, stderr } = data;
     let html = `<div class="card result-section">
@@ -1618,6 +1640,7 @@ body{height:auto;overflow:auto;padding:28px;}
   // both paths render through here — saved mode just adds the scan bar, a notes
   // column and new/gone badges. Live mode is unchanged.
   function renderSubnet(data, ctx) {
+    lastResults.subnet = data;
     subnetStatus.hidden = true;
     const { subnet, hosts, command, stderr } = data;
     const notes = (ctx && ctx.notes) || {};
@@ -2111,6 +2134,7 @@ body{height:auto;overflow:auto;padding:28px;}
   }
 
   function renderUrl(r) {
+    lastResults.url = r;
     urlStatus.hidden = true;
     let html = '';
 
@@ -2437,6 +2461,7 @@ body{height:auto;overflow:auto;padding:28px;}
   });
 
   function renderExposures(data) {
+    lastResults.exposure = data;
     expStatus.hidden = true;
     const badge = data.exposedCount ? 'badge-down' : 'badge-up';
     let html = `<div class="card result-section"><h3>Exposed Files
@@ -2550,6 +2575,7 @@ body{height:auto;overflow:auto;padding:28px;}
 
   function renderRepoAudit(data) {
     repoStatus.hidden = true;
+    lastResults.repo = data;
     repoTarget = data.repo || '';
     const secrets = data.secrets || [], deps = data.dependencies || [];
     let html = '';
@@ -2641,6 +2667,29 @@ body{height:auto;overflow:auto;padding:28px;}
     } else { html += `<p class="muted">No workflow findings (or no workflows present).</p>`; }
     html += `</div>`;
 
+    // Repo Posture: hygiene and supply-chain coverage read from the clone. The
+    // "not assessed" list is deliberate — a report that names what it couldn't
+    // see is worth more than one that quietly leaves it out.
+    const posture = data.posture || {}, pf = posture.findings || [];
+    html += `<div class="card result-section" data-section="posture"><h3>Repo Posture
+      <span class="badge ${pf.length ? 'badge-down' : 'badge-up'}">${pf.length}</span></h3>`;
+    if (pf.length) {
+      html += `<table class="data-table"><thead><tr>
+        <th>ID</th><th>Check</th><th>Severity</th><th>File</th><th>Finding</th></tr></thead><tbody>`;
+      for (const f of pf)
+        html += `<tr data-sev="${sevKey(f.severity)}"><td class="mono">${esc(f.id)}</td>
+          <td>${esc(f.check)}</td><td>${esc(f.severity)}</td>
+          <td class="mono">${f.file ? esc(f.file) : '<span class="muted">—</span>'}</td>
+          <td>${esc(f.title)}${f.detail ? ` — <span class="muted">${esc(f.detail)}</span>` : ''}</td></tr>`;
+      html += `</tbody></table>`;
+    } else { html += `<p class="muted">No posture findings.</p>`; }
+    if ((posture.unassessed || []).length) {
+      html += `<p class="hint"><strong>Not assessed</strong> — these need administrative access
+        this tool doesn't have, so they're neither passing nor failing here:</p>
+        <ul class="unassessed">${posture.unassessed.map(u => `<li>${esc(u)}</li>`).join('')}</ul>`;
+    }
+    html += `</div>`;
+
     const sbom = data.sbom;
     if (sbom && sbom.document) {
       html += `<div class="card result-section" data-section="sbom"><h3>SBOM
@@ -2651,7 +2700,7 @@ body{height:auto;overflow:auto;padding:28px;}
     }
 
     html += `<div class="timestamp">Audited ${esc(data.repo)} at ${esc(new Date(data.timestamp).toLocaleString())}</div>`;
-    const hasSeverities = deps.length || mis.length || lic.length;
+    const hasSeverities = deps.length || mis.length || lic.length || pf.length;
     repoResults.innerHTML = reportBar('repo') + (hasSeverities ? repoFilterBar() : '') + html;
     if (hasSeverities)
       document.querySelectorAll('#repo-results [data-sev-filter]')
@@ -2770,6 +2819,7 @@ body{height:auto;overflow:auto;padding:28px;}
   // stored one — the same contract renderSubnet uses. Saved mode adds the scan
   // bar, a notes column and new/gone badges; live mode renders as it always has.
   function renderSubdomains(r, ctx) {
+    lastResults.subdomains = r;
     subStatus.hidden = true;
     const notes = (ctx && ctx.notes) || {};
     const newKeys = new Set((ctx && ctx.newKeys) || []);
