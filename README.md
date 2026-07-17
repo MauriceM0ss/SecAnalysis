@@ -94,9 +94,9 @@ things in the top bar.
 - **SBOM** (`trivy`) — a downloadable CycloneDX bill of materials.
 - **Dockerfile lint** (`hadolint`) and **GitHub Actions audit** (`zizmor`,
   offline) — `pull_request_target` abuse, unpinned actions, token over-scoping.
-- **Remote or local** — audit a public `github.com`/`gitlab.com` URL (shallow
-  clone), or a repo you've cloned yourself. See
-  [Auditing private repos](#auditing-private-repos-with-local-clones).
+- **Remote or local** — audit a `github.com`/`gitlab.com` URL (shallow clone), or
+  a repo you've cloned yourself. Private GitHub repos work by URL once you set a
+  token. See [Auditing private repos](#auditing-private-repos).
 
 ### Subdomain Finder
 - **Passive discovery** across [crt.sh](https://crt.sh), CertSpotter, and
@@ -147,19 +147,55 @@ Two different things, and the difference matters:
   to any host. Notes are keyed to the scan, so they survive a host dropping out
   of a refresh and coming back.
 
-## Auditing private repos with local clones
+## Auditing private repos
 
-To audit a private / organisation repo without giving this app a GitHub token,
-clone it yourself and point **Repo Audit → Local clone** at it. The host folder
-set by `AUDIT_DIR` (default `./audit`) is mounted **read-only** at `/audit`; any
-repo you drop in there appears in the Local clone dropdown:
+Two ways, depending on whether you'd rather give the app a token or not.
+
+### By URL, with a token (GitHub only)
+
+Set `GITHUB_TOKEN` and private `github.com` repos audit by URL like public ones —
+no manual clone step. Put it in a `.env` file next to `docker-compose.yml`
+(`.env` is gitignored):
+
+```bash
+echo 'GITHUB_TOKEN=github_pat_...' > .env
+docker compose up --build
+```
+
+Use a **fine-grained PAT** with **Contents: Read-only**, scoped to just the repos
+you audit, with an expiry set. It's the least privilege that lets git clone.
+
+How the token is handled:
+
+- **Public repos never use it.** Clones are tried anonymously first, and the
+  token is only attempted if that fails in a way a credential could fix. This
+  isn't just hygiene — GitHub rejects any request carrying a bad credential, so
+  an expired token attached to every clone would break public audits too.
+- **It's scoped to `https://github.com/`**, so a redirect can't carry it to
+  another host. GitLab never sees it.
+- **It never reaches the command line or the clone URL.** It's passed through
+  git's env-var config, because argv is world-readable via `ps`, and a
+  URL-embedded credential gets echoed back in git's error output and written
+  into the clone's `.git/config` — where gitleaks would then report it as a leak.
+- **It's stripped from error messages** before they reach the UI, so it can't
+  ride along into a saved report.
+- Unset it and everything behaves exactly as it did before: public repos by URL,
+  private ones via a local clone.
+
+### By local clone (any host, no token)
+
+To audit a private repo — or anything on GitLab, or a working tree with
+uncommitted changes — clone it yourself and point **Repo Audit → Local clone** at
+it. The host folder set by `AUDIT_DIR` (default `./audit`) is mounted
+**read-only** at `/audit`; any repo you drop in there appears in the dropdown:
 
 ```bash
 git clone git@github.com:my-org/private-app.git ./audit/private-app
 AUDIT_DIR=./audit docker compose up --build      # ./audit is the default
 ```
 
-Your credentials never enter the app — git does the clone, not SecAnalysis.
+Your credentials never enter the app — git does the clone, not SecAnalysis. This
+also scans full history, where a URL audit is a shallow clone of the tip commit.
 
 ## Scanning the host machine or its LAN
 
@@ -198,6 +234,7 @@ outside scanner would need, but the scan itself has to come from outside.)
 | Variable       | Default                  | Meaning                                              |
 |----------------|--------------------------|------------------------------------------------------|
 | `SCAN_TIMEOUT` | `300`                    | Max seconds before a scan aborts                     |
+| `GITHUB_TOKEN` | _(unset)_                | Fine-grained PAT for auditing private GitHub repos by URL |
 | `AUDIT_DIR`    | `./audit`                | Host folder of local clones, mounted at `/audit`     |
 | `AUDIT_ROOT`   | `/audit`                 | In-container path Repo Audit reads local clones from |
 | `DATA_DIR`     | `./data`                 | Host folder for the database + saved reports         |
@@ -240,6 +277,10 @@ scan your network, so don't expose it to one you don't trust. Beyond that:
   with **path traversal blocked**.
 - State-changing requests are **origin-checked** (CSRF), request bodies are
   capped, and gitleaks findings are **redacted** to a 4-character preview.
+- `GITHUB_TOKEN`, if set, is **never** put on a command line or in a clone URL,
+  is scoped to `https://github.com/`, is withheld from anonymous clones, and is
+  stripped from any error text on its way to the UI. See
+  [Auditing private repos](#auditing-private-repos).
 
 See `SECURITY.md` for how to report an issue.
 

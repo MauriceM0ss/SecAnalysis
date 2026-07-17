@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Local config — holds GITHUB_TOKEN for private Repo Audit clones. Never commit.
+.env
+
 # Local clones dropped in for Repo Audit — keep the folder, ignore its contents
 /audit/*
 !/audit/.gitkeep
