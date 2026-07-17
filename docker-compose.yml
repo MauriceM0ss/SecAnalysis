@@ -10,12 +10,21 @@ services:
       SCAN_TIMEOUT: "300"    # max seconds per scan
       AUDIT_ROOT: "/audit"   # where local clones are mounted (see volumes below)
       DB_PATH: "/data/secanalysis.db"   # Availability Dashboard store (see volumes)
+      # ── Repo Audit: private GitHub repos ─────────────────────────────────
+      # Optional. Set GITHUB_TOKEN in a .env file next to this one (it's
+      # gitignored) to audit private repos by URL, without cloning them by hand
+      # first. Use a fine-grained PAT with Contents: Read-only, scoped to just
+      # the repos you audit, and give it an expiry. Leave it unset and the app
+      # behaves exactly as before — public repos by URL, private ones via the
+      # local-clone mount below. The token is only ever sent to github.com.
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
 
     # ── Repo Audit: local clones ───────────────────────────────────────────
-    # The Repo Audit "local clone" mode scans repos you've cloned yourself, so
-    # you can audit private / organisation repos without putting a GitHub token
-    # in this app. Point AUDIT_DIR at the host folder holding your clones
-    # (defaults to ./audit) — it's mounted read-only:
+    # The "local clone" mode scans repos you've cloned yourself — still the way
+    # to audit anything GITHUB_TOKEN doesn't cover (GitLab, other hosts, or a
+    # working tree with uncommitted changes), and the way to audit private repos
+    # with no token in the app at all. Point AUDIT_DIR at the host folder holding
+    # your clones (defaults to ./audit) — it's mounted read-only:
     volumes:
       - "${AUDIT_DIR:-./audit}:/audit:ro"
       # Availability Dashboard: persists monitors + check history across restarts.

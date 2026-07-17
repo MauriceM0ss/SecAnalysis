@@ -914,6 +914,36 @@
     </div>
   </dialog>
 
+  <!-- Repo Audit: choose what a generated report contains. Severity applies only
+       to the sections whose rows carry one; a section unchecked here is left out
+       of the document entirely. Opens from "Create report" with the severities
+       pre-set to whatever the on-screen filter is showing. "Add to history" does
+       not come through here — history always archives the complete audit. -->
+  <dialog class="finding-dialog report-dialog" id="report-dialog" aria-labelledby="report-title">
+    <div class="dlg-head">
+      <h2 id="report-title">Report contents</h2>
+      <button class="icon-btn dlg-x" id="report-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div class="dlg-body">
+      <div id="report-sev-group" hidden>
+        <span class="field-label">Severities</span>
+        <div class="sev-filter report-sevs" id="report-sevs"></div>
+      </div>
+      <span class="field-label">Sections</span>
+      <div class="report-sections" id="report-sections"></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="dlg-note" id="report-note"></span>
+      <button class="btn-secondary" id="report-cancel" type="button">Cancel</button>
+      <button class="btn-primary" id="report-create" type="button">Create report</button>
+    </div>
+  </dialog>
+
   <!-- Console: run one of a fixed set of read-only network tools against a host.
        Not a shell — the tool list and every flag come from the server. -->
   <dialog class="finding-dialog console-dialog" id="console-dialog" aria-labelledby="console-title">
@@ -1114,9 +1144,17 @@
     subnet:     { name: 'Subnet Scan',    resultsId: 'subnet-results',     targetId: 'subnet-cidr' },
     url:        { name: 'URL Analyzer',   resultsId: 'url-results',        targetId: 'url' },
     exposure:   { name: 'Exposure Probe', resultsId: 'exp-results',        targetId: 'exp-url' },
-    repo:       { name: 'Repo Audit',     resultsId: 'repo-results',       targetId: 'repo-url' },
+    repo:       { name: 'Repo Audit',     resultsId: 'repo-results' },   // target: see toolTarget
     subdomains: { name: 'Subdomains',     resultsId: 'subdomains-results', targetId: 'subdomains-domain' },
   };
+  // What a report names as its target. Usually the tool's input field, but Repo
+  // Audit accepts either a URL or a local clone from a picker, so `targetId`
+  // alone reports "—" for every local audit. It uses the source the server said
+  // it audited instead, which is also what the "Audited …" line already shows.
+  function toolTarget(tool) {
+    if (tool === 'repo') return repoTarget;
+    return (document.getElementById(TOOL_META[tool].targetId)?.value || '').trim();
+  }
   // `extra` lets a tool add its own action alongside the shared two (Subnet Scan
   // uses it for "Save scan"). buildReportDoc strips .report-actions entirely, so
   // anything added here stays out of generated reports.
@@ -1130,7 +1168,11 @@
   // Serialise a tool's current results into a standalone report document.
   // Returns { doc, filename } or null when there's nothing to report. Shared by
   // "Create report" (save to disk) and "Add to history" (save on the server).
-  async function buildReportDoc(tool) {
+  //
+  // `sel` narrows a Repo Audit report to { sevs, sections } chosen in the report
+  // dialog. Omit it for the whole audit — that's what history stores, and what
+  // every other tool passes, since only Repo Audit has anything to narrow.
+  async function buildReportDoc(tool, sel) {
     const meta = TOOL_META[tool];
     const node = document.getElementById(meta.resultsId);
     if (!node || !node.innerHTML.trim()) return null;
@@ -1139,29 +1181,44 @@
     // Link-style buttons (finding IDs) become plain text so the ID still shows.
     clone.querySelectorAll('.link-btn').forEach(b => b.replaceWith(document.createTextNode(b.textContent)));
     clone.querySelectorAll('.report-actions, .sev-filter, .row-actions, button').forEach(el => el.remove());
-    if (tool === 'repo') {
-      // Repo report reflects the current severity selection: drop filtered-out
-      // rows and re-count each section's badge to the rows that remain.
+    clone.querySelectorAll('tr[style]').forEach(tr => { tr.style.display = ''; });   // undo screen filtering
+    if (tool === 'repo' && sel) {
+      // Drop whole sections left out of the selection, then within the ones that
+      // stay drop rows whose severity wasn't selected, re-counting each badge to
+      // the rows that remain so the header can't contradict the table.
       clone.querySelectorAll('.result-section').forEach(sec => {
+        // An untagged section isn't offered in the dialog, so it can't have been
+        // deselected — keep it rather than silently dropping findings.
+        const key = sec.dataset.section;
+        if (key && !sel.sections.has(key)) { sec.remove(); return; }
         const sevRows = sec.querySelectorAll('tr[data-sev]');
         if (!sevRows.length) return;                    // section without severities
-        let visible = 0;
+        let kept = 0;
         sevRows.forEach(tr => {
-          if (tr.style.display === 'none') tr.remove();
-          else { tr.style.display = ''; visible++; }
+          if (sel.sevs.has(tr.dataset.sev)) kept++;
+          else tr.remove();
         });
         const badge = sec.querySelector('.badge');
-        if (badge) badge.textContent = String(visible);
+        if (badge) badge.textContent = String(kept);
+        // Every row filtered out: a bare table header reads as a broken report,
+        // so say why the section is empty instead.
+        if (!kept) {
+          const table = sec.querySelector('table');
+          if (table) {
+            const p = document.createElement('p');
+            p.className = 'muted';
+            p.textContent = 'No findings at the selected severities.';
+            table.replaceWith(p);
+          }
+        }
       });
-    } else {
-      clone.querySelectorAll('tr[style]').forEach(tr => { tr.style.display = ''; });   // show all rows
     }
 
     let css = '';
     try { css = await (await fetch('/static/style.css')).text(); } catch (e) {}
     const theme = document.documentElement.getAttribute('data-theme') || 'neon';
     const version = (document.querySelector('.app-version')?.textContent || '').trim();
-    const target = (document.getElementById(meta.targetId)?.value || '').trim();
+    const target = toolTarget(tool);
     const when = new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
     const doc = `<!DOCTYPE html><html lang="en" data-theme="${theme}"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1213,16 +1270,21 @@ body{height:auto;overflow:auto;padding:28px;}
   }
 
   async function createReport(tool) {
+    // Repo Audit reports are picked apart first — the dialog takes it from here.
+    // Every other tool has one shape of result and reports it whole.
+    if (tool === 'repo') { openReportDialog(); return; }
     const built = await buildReportDoc(tool);
     if (!built) return;
     await saveReport(built.doc, built.filename);
   }
 
   // Persist the current report on the server (History folder, per tool).
+  // Deliberately unfiltered: history is the archive of what the audit found, so
+  // it stores the run whole regardless of what's filtered on screen.
   async function addToHistory(tool, btn) {
     const built = await buildReportDoc(tool);
     if (!built) return;
-    const target = (document.getElementById(TOOL_META[tool].targetId)?.value || '').trim();
+    const target = toolTarget(tool);
     const restore = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
@@ -1263,6 +1325,94 @@ body{height:auto;overflow:auto;padding:28px;}
       tr.style.display = on.has(tr.dataset.sev) ? '' : 'none';
     });
   }
+
+  // ── Repo Audit report dialog ──────────────────────────────────────────────
+  // An audit covers seven subjects at five severities, and a report rarely wants
+  // all of it — so "Create report" asks first. Each section is addressed by its
+  // data-section key rather than its heading text, so renaming a heading can't
+  // silently drop it from reports.
+  const REPORT_SECTIONS = [
+    { key: 'secrets',           name: 'Secrets' },
+    { key: 'dependencies',      name: 'Vulnerable Dependencies' },
+    { key: 'misconfigurations', name: 'IaC Misconfigurations' },
+    { key: 'licenses',          name: 'License Risks' },
+    { key: 'dockerfile',        name: 'Dockerfile Lint' },
+    { key: 'actions',           name: 'GitHub Actions Audit' },
+    { key: 'sbom',              name: 'SBOM' },
+  ];
+  const reportDialog = document.getElementById('report-dialog');
+  const reportSevGroup = document.getElementById('report-sev-group');
+  const reportSevsEl = document.getElementById('report-sevs');
+  const reportSectionsEl = document.getElementById('report-sections');
+  const reportNote = document.getElementById('report-note');
+  const reportCreateBtn = document.getElementById('report-create');
+
+  function openReportDialog() {
+    const results = document.getElementById('repo-results');
+    if (!results || !results.innerHTML.trim()) return;
+    // Severities are only worth offering when something rendered carries one.
+    const hasSev = !!results.querySelector('tr[data-sev]');
+    reportSevGroup.hidden = !hasSev;
+    reportSevsEl.innerHTML = !hasSev ? '' : SEVERITIES.map(s => {
+      // Start from what the screen filter is showing: the report opens as the
+      // view you already curated, and can be narrowed further from there.
+      const on = document.querySelector(`#repo-results [data-sev-filter="${s}"]`);
+      return `<label class="sev-chip sev-${s}"><input type="checkbox" data-report-sev="${s}"`
+        + `${!on || on.checked ? ' checked' : ''}>${s}</label>`;
+    }).join('');
+    // Only offer sections this audit actually produced.
+    reportSectionsEl.innerHTML = REPORT_SECTIONS.map(s => {
+      const sec = results.querySelector(`.result-section[data-section="${s.key}"]`);
+      if (!sec) return '';
+      const badge = sec.querySelector('.badge');
+      const count = badge ? badge.textContent.trim() : '';
+      return `<label class="report-check"><input type="checkbox" data-report-section="${s.key}" checked>`
+        + `<span>${esc(s.name)}</span>`
+        + (count ? `<span class="report-count">${esc(count)}</span>` : '') + `</label>`;
+    }).join('');
+    updateReportDialog();
+    reportDialog.showModal();
+  }
+
+  // Guard the two selections that would produce a document with nothing in it.
+  function updateReportDialog() {
+    const results = document.getElementById('repo-results');
+    const sections = [...reportSectionsEl.querySelectorAll('[data-report-section]:checked')]
+      .map(c => c.dataset.reportSection);
+    const sevs = reportSevsEl.querySelectorAll('[data-report-sev]:checked');
+    let note = '';
+    if (!sections.length) {
+      note = 'Select at least one section.';
+    } else if (!reportSevGroup.hidden && !sevs.length) {
+      // Sections like Secrets or Dockerfile Lint have no severities, so they
+      // still have something to say with every severity unchecked. If none of
+      // those is selected, the report would be all empty tables.
+      const anySevFree = sections.some(k =>
+        !results.querySelector(`.result-section[data-section="${k}"] tr[data-sev]`));
+      if (!anySevFree) note = 'Select at least one severity.';
+    }
+    reportCreateBtn.disabled = !!note;
+    reportNote.textContent = note;
+  }
+
+  async function submitReportDialog() {
+    const sel = {
+      sevs: new Set([...reportSevsEl.querySelectorAll('[data-report-sev]:checked')]
+        .map(c => c.dataset.reportSev)),
+      sections: new Set([...reportSectionsEl.querySelectorAll('[data-report-section]:checked')]
+        .map(c => c.dataset.reportSection)),
+    };
+    reportDialog.close();
+    const built = await buildReportDoc('repo', sel);
+    if (!built) return;
+    await saveReport(built.doc, built.filename);
+  }
+
+  reportSevsEl.addEventListener('change', updateReportDialog);
+  reportSectionsEl.addEventListener('change', updateReportDialog);
+  reportCreateBtn.addEventListener('click', submitReportDialog);
+  document.getElementById('report-close').addEventListener('click', () => reportDialog.close());
+  document.getElementById('report-cancel').addEventListener('click', () => reportDialog.close());
 
   // ── Menu / view switching ─────────────────────────────────────────────
   const SUBTITLES = { netscan: 'Local Network Scanner', subnet: 'Subnet Host Discovery',
@@ -2332,6 +2482,7 @@ body{height:auto;overflow:auto;padding:28px;}
   const repoLabel = document.getElementById('repo-input-label');
   let localLoaded = false;
   let repoFindings = { dep: [], mis: [] };   // last audit's findings, for the detail dialog
+  let repoTarget = '';                       // what the last audit actually ran against
 
   function repoIsLocal() {
     return repoForm.querySelector('input[name="repo-source"]:checked').value === 'local';
@@ -2399,10 +2550,11 @@ body{height:auto;overflow:auto;padding:28px;}
 
   function renderRepoAudit(data) {
     repoStatus.hidden = true;
+    repoTarget = data.repo || '';
     const secrets = data.secrets || [], deps = data.dependencies || [];
     let html = '';
 
-    html += `<div class="card result-section"><h3>Secrets
+    html += `<div class="card result-section" data-section="secrets"><h3>Secrets
       <span class="badge ${secrets.length ? 'badge-down' : 'badge-up'}">${secrets.length}</span></h3>`;
     if (secrets.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2415,7 +2567,7 @@ body{height:auto;overflow:auto;padding:28px;}
     } else { html += `<p class="muted">No secrets detected.</p>`; }
     html += `</div>`;
 
-    html += `<div class="card result-section"><h3>Vulnerable Dependencies
+    html += `<div class="card result-section" data-section="dependencies"><h3>Vulnerable Dependencies
       <span class="badge ${deps.length ? 'badge-down' : 'badge-up'}">${deps.length}</span></h3>`;
     if (deps.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2433,7 +2585,7 @@ body{height:auto;overflow:auto;padding:28px;}
 
     const mis = data.misconfigurations || [];
     repoFindings = { dep: deps, mis: mis };   // looked up by the detail dialog
-    html += `<div class="card result-section"><h3>IaC Misconfigurations
+    html += `<div class="card result-section" data-section="misconfigurations"><h3>IaC Misconfigurations
       <span class="badge ${mis.length ? 'badge-down' : 'badge-up'}">${mis.length}</span></h3>`;
     if (mis.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2449,7 +2601,7 @@ body{height:auto;overflow:auto;padding:28px;}
     html += `</div>`;
 
     const lic = data.licenses || [];
-    html += `<div class="card result-section"><h3>License Risks
+    html += `<div class="card result-section" data-section="licenses"><h3>License Risks
       <span class="badge ${lic.length ? 'badge-down' : 'badge-up'}">${lic.length}</span></h3>`;
     if (lic.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2462,7 +2614,7 @@ body{height:auto;overflow:auto;padding:28px;}
     html += `</div>`;
 
     const dock = data.dockerfile || [];
-    html += `<div class="card result-section"><h3>Dockerfile Lint
+    html += `<div class="card result-section" data-section="dockerfile"><h3>Dockerfile Lint
       <span class="badge ${dock.length ? 'badge-down' : 'badge-up'}">${dock.length}</span></h3>`;
     if (dock.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2476,7 +2628,7 @@ body{height:auto;overflow:auto;padding:28px;}
     html += `</div>`;
 
     const act = data.actions || [];
-    html += `<div class="card result-section"><h3>GitHub Actions Audit
+    html += `<div class="card result-section" data-section="actions"><h3>GitHub Actions Audit
       <span class="badge ${act.length ? 'badge-down' : 'badge-up'}">${act.length}</span></h3>`;
     if (act.length) {
       html += `<table class="data-table"><thead><tr>
@@ -2491,7 +2643,7 @@ body{height:auto;overflow:auto;padding:28px;}
 
     const sbom = data.sbom;
     if (sbom && sbom.document) {
-      html += `<div class="card result-section"><h3>SBOM
+      html += `<div class="card result-section" data-section="sbom"><h3>SBOM
         <span class="badge badge-up">${sbom.componentCount} components</span></h3>
         <p class="hint">${esc(sbom.format)} ${esc(sbom.specVersion || '')} software bill of materials
           for this repository.</p>
@@ -2996,6 +3148,7 @@ body{height:auto;overflow:auto;padding:28px;}
   let dashTimer = null;
   let lastSeenEventId = 0;
   let dashPrimed = false;   // suppress notifications on the very first load
+  let dashVisible = false;  // is the Dashboard view up? gates painting, not polling
 
   const TYPE_TARGET_LABEL = { http: 'URL', api: 'URL', tcp: 'Host / IP', icmp: 'Host / IP' };
   const TYPE_TARGET_PH = {
@@ -3146,7 +3299,15 @@ body{height:auto;overflow:auto;padding:28px;}
       ev.innerHTML = html;
     } else { ev.innerHTML = ''; }
 
-    // Browser notifications for newly-observed DOWN transitions.
+  }
+
+  // Browser notifications for newly-observed DOWN transitions. Driven by the
+  // poll rather than the render, so a monitor going down still reaches you from
+  // any view — the checks themselves are server-side and never stopped, but
+  // until this split nothing was listening for their results unless the
+  // Dashboard happened to be open. `dashPrimed` suppresses the first response's
+  // backlog: those transitions are history, not news.
+  function notifyDashboard(d) {
     const fresh = d.events.filter(e => e.id > lastSeenEventId);
     if (d.events.length) lastSeenEventId = Math.max(lastSeenEventId, ...d.events.map(e => e.id));
     if (dashPrimed && 'Notification' in window && Notification.permission === 'granted') {
@@ -3174,7 +3335,8 @@ body{height:auto;overflow:auto;padding:28px;}
       const res = await fetch('/api/dashboard');
       const d = await res.json();
       window.__dashMonitors = d.monitors;
-      renderDashboard(d);
+      notifyDashboard(d);                 // every tick, whatever view is up
+      if (dashVisible) renderDashboard(d);   // painting a hidden view is wasted work
     } catch (err) { /* transient; next tick retries */ }
   }
   document.getElementById('dash-refresh').addEventListener('click', refreshDashboard);
@@ -3190,14 +3352,14 @@ body{height:auto;overflow:auto;padding:28px;}
   });
   syncNotifyBtn();
 
+  // The view only decides whether to paint — the poll itself runs from load to
+  // unload so notifications don't depend on where you happen to be standing.
   function setDashboardActive(active) {
-    if (active) {
-      refreshDashboard();
-      if (!dashTimer) dashTimer = setInterval(refreshDashboard, DASH_POLL_MS);
-    } else if (dashTimer) {
-      clearInterval(dashTimer); dashTimer = null;
-    }
+    dashVisible = active;
+    if (active) refreshDashboard();   // don't make the view wait for the next tick
   }
+  dashTimer = setInterval(refreshDashboard, DASH_POLL_MS);
+  refreshDashboard();                 // primes lastSeenEventId against the backlog
   </script>
 </body>
 </html>

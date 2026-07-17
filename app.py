@@ -1425,6 +1425,80 @@ def is_valid_repo(url: str) -> bool:
     return bool(REPO_RE.match(url))
 
 
+# A private repo has the same URL shape as a public one, so REPO_RE needs no
+# loosening — only git needs a credential. Read once at import: it's deployment
+# config, not something the app lets you set at runtime.
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+
+
+def _github_basic() -> str:
+    return base64.b64encode(f"x-access-token:{GITHUB_TOKEN}".encode()).decode()
+
+
+def _git_env(authed: bool = False) -> dict:
+    """Environment for git subprocesses; carries the token only when asked.
+
+    The credential goes through git's env-var config rather than the clone URL
+    or the command line, because both of those leak it: argv is world-readable
+    via ps, and a URL-embedded credential is echoed back in git's own error
+    output *and* persisted into the clone's .git/config — where gitleaks would
+    then dutifully find it and report it as a leak in the audit. The header is
+    scoped to https://github.com/ so an HTTP redirect can't carry it anywhere
+    else.
+    """
+    env = dict(os.environ)
+    # git has no use for the raw variable — the credential reaches it through the
+    # scoped header below, and only when authed. Dropping it keeps the anonymous
+    # clone, which is the one that runs against arbitrary URLs, token-free.
+    env.pop("GITHUB_TOKEN", None)
+    # No tty here: without this a missing or rejected credential makes git block
+    # on a username prompt until SCAN_TIMEOUT instead of failing immediately.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if authed and GITHUB_TOKEN:
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {_github_basic()}"
+    return env
+
+
+# Failures worth a second, authenticated attempt: the repo is hidden, or git
+# wanted a credential and had none. Anything else (a network timeout, a bad
+# object) would fail identically with a token and just burn another SCAN_TIMEOUT.
+_RETRY_RE = re.compile(
+    r"not found|Authentication failed|Invalid username or token|"
+    r"could not read Username|terminal prompts disabled", re.I)
+# GitHub rejecting the credential itself, as opposed to hiding a repo from it.
+_TOKEN_REJECTED_RE = re.compile(r"Authentication failed|Invalid username or token", re.I)
+
+
+def _scrub(text: str) -> str:
+    """Strip the token from anything on its way to the UI. Reports are generated
+    from what the UI displays, so this is also what keeps it out of saved files."""
+    if GITHUB_TOKEN:
+        for secret in (GITHUB_TOKEN, _github_basic()):
+            text = text.replace(secret, "***")
+    return text
+
+
+def _clone_error(stderr: str, repo_url: str, tried_token: bool) -> str:
+    msg = _scrub(stderr.strip())[:500] or "git clone failed"
+    is_github = "github.com" in repo_url
+    if tried_token and _TOKEN_REJECTED_RE.search(stderr):
+        msg += ("  GITHUB_TOKEN was rejected — it's most likely expired. Public "
+                "repositories are unaffected; they never use the token.")
+    elif tried_token:
+        # A fine-grained PAT without access to a repo gets the same "not found"
+        # as an anonymous request — GitHub won't confirm a private repo exists.
+        msg += ("  GITHUB_TOKEN doesn't grant access to this repository — check it "
+                "covers this repo and has Contents: Read.")
+    elif not GITHUB_TOKEN and is_github and "not found" in msg.lower():
+        # Without a token a private repo is indistinguishable from a typo, so say
+        # so rather than leave the user hunting for a misspelling.
+        msg += ("  If this repository is private, set GITHUB_TOKEN in your .env "
+                "and restart the container.")
+    return msg
+
+
 def scan_secrets(repo_dir: str, report_path: str) -> list:
     """Run gitleaks over a cloned repo. Returns findings with secrets redacted."""
     # gitleaks exits 1 when it finds leaks — that's a result, not an error, so we
@@ -1620,15 +1694,32 @@ def scan_path(repo_dir: str) -> dict:
     }
 
 
+def _run_clone(repo_url: str, repo_dir: str, authed: bool):
+    return subprocess.run(
+        ["git", "clone", "--depth", "1", "--no-tags", repo_url, repo_dir],
+        capture_output=True, text=True, timeout=SCAN_TIMEOUT, env=_git_env(authed))
+
+
 def audit_repo(repo_url: str) -> dict:
-    """Shallow-clone a remote repo into a temp dir, then scan it."""
+    """Shallow-clone a remote repo into a temp dir, then scan it.
+
+    Clones anonymously first and only retries with GITHUB_TOKEN if that fails in
+    a way a credential could fix. Public repos therefore never see the token:
+    they can't break when it expires, and it's only ever sent where it's needed.
+    That ordering matters — GitHub rejects a request carrying a bad credential
+    outright, so an expired token attached to every clone would take public
+    audits down with it.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         repo_dir = os.path.join(tmp, "repo")
-        clone = subprocess.run(
-            ["git", "clone", "--depth", "1", "--no-tags", repo_url, repo_dir],
-            capture_output=True, text=True, timeout=SCAN_TIMEOUT)
+        clone = _run_clone(repo_url, repo_dir, authed=False)
+        tried_token = (clone.returncode != 0 and GITHUB_TOKEN
+                       and "github.com" in repo_url and _RETRY_RE.search(clone.stderr))
+        if tried_token:
+            shutil.rmtree(repo_dir, ignore_errors=True)   # a failed clone can leave a partial dir
+            clone = _run_clone(repo_url, repo_dir, authed=True)
         if clone.returncode != 0:
-            return {"error": clone.stderr.strip()[:500] or "git clone failed"}
+            return {"error": _clone_error(clone.stderr, repo_url, bool(tried_token))}
         return scan_path(repo_dir)
 
 
