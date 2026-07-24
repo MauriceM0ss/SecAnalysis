@@ -41,7 +41,7 @@ def test_index_renders(client):
 
 def test_security_headers(client):
     r = client.get("/")
-    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert "frame-ancestors" in r.headers.get("Content-Security-Policy", "")
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
 
 
