@@ -1,0 +1,30 @@
+name: gitleaks
+
+# Second layer of secret protection: the local pre-commit hook catches secrets
+# before they are committed; this scans on GitHub's servers after every push and
+# on pull requests, so it protects even if a commit was made with --no-verify or
+# on a machine without the hook installed.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:   # allows running it manually from the Actions tab
+
+jobs:
+  scan:
+    name: scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 pulls the entire history so gitleaks scans every
+          # commit on the branch, not just the latest one.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gitleaks-action is free for public repositories and personal use;
+          # no GITLEAKS_LICENSE is required here.
