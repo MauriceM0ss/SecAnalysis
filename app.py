@@ -2068,7 +2068,12 @@ def _csrf_guard():
 @app.after_request
 def _security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("X-Frame-Options", "DENY")
+    # Allow embedding only in the CyberDash dashboard (localhost:5173);
+    # frame-ancestors blocks clickjacking from every other origin. This
+    # replaces X-Frame-Options, which can't allow-list a foreign origin.
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "frame-ancestors 'self' http://localhost:5173")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
     return resp
 
