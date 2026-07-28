@@ -10,6 +10,7 @@
     (function () {
       try {
         var t = localStorage.getItem('secanalysis-theme') || 'neon';
+        if (t === 'classic') t = 'blue';   // renamed; see THEME_ALIASES below
         document.documentElement.setAttribute('data-theme', t);
       } catch (e) { document.documentElement.setAttribute('data-theme', 'neon'); }
     })();
@@ -23,9 +24,43 @@
 
   <!-- ── Top bar ──────────────────────────────────────────────────────── -->
   <header class="site-header">
-    <div class="logo">
-      <img class="logo-icon" src="{{ url_for('static', filename='favicon.svg') }}" alt="">
-      <span class="logo-text">SecAnalysis</span>
+    <div class="header-left">
+      <button class="icon-btn menu-btn" id="menu-btn" type="button"
+              aria-expanded="true" aria-controls="sidebar"
+              title="Collapse the menu" aria-label="Collapse the menu">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+      </button>
+      <div class="logo">
+        <!-- Inline rather than <img src="favicon.svg">: inline SVG can read the
+             theme tokens, so the shield takes --header-logo like the wordmark
+             beside it, and the tick is knocked out in the bar's own background.
+             favicon.svg stays a fixed-colour tile — a browser tab has no theme. -->
+        <svg class="logo-icon" viewBox="5 5.5 22 23" aria-hidden="true">
+          <!-- shield: straight top, sides curving to a point -->
+          <path d="M6 6.5
+                   L26 6.5
+                   L26 14.5
+                   C26 20.5, 21.5 25.2, 16 28
+                   C10.5 25.2, 6 20.5, 6 14.5
+                   Z"
+                fill="currentColor"/>
+          <!-- top highlight band -->
+          <path d="M7.4 7.9 L24.6 7.9 L24.6 12
+                   C21 10.2, 18.4 9.7, 16 9.7
+                   C13.6 9.7, 11 10.2, 7.4 12 Z"
+                fill="#fff" opacity=".3"/>
+          <!-- check mark, cut out of the shield -->
+          <path d="M11.4 16 L14.7 19.2 L20.7 12.4"
+                fill="none" stroke="var(--header-bg)" stroke-width="2.6"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo-text">SecAnalysis</span>
+      </div>
     </div>
     <span class="header-title" id="header-subtitle">Local Network Scanner</span>
     <div class="header-actions">
@@ -69,7 +104,7 @@
 
   <div class="layout">
     <!-- ── Left menu ──────────────────────────────────────────────────── -->
-    <nav class="sidebar" aria-label="Functions">
+    <nav class="sidebar" id="sidebar" aria-label="Functions">
       <div class="sidebar-section">Functions</div>
       <button class="menu-item active" data-view="netscan">
         <span class="menu-text"><strong>Network Scan</strong></span>
@@ -122,11 +157,6 @@
       <button class="menu-item" data-view="history">
         <span class="menu-text"><strong>History</strong></span>
       </button>
-
-      <div class="sidebar-status" title="Application version">
-        <span class="app-name">SecAnalysis</span>
-        <span class="app-version">v{{ version }}</span>
-      </div>
     </nav>
 
 
@@ -138,7 +168,10 @@
            narrow screen the CSS dissolves the panes and stacks the cards. -->
       <section class="view active" id="view-netscan">
         <div class="pane-input">
-        <form id="scan-form" class="card">
+        <!-- The target panel collapses to a one-line bar so a long scan result
+             gets the whole pane. The state is remembered per browser; the bar
+             still shows what the target is, and re-expands from the chevron. -->
+        <form id="scan-form" class="card collapsible">
           <button type="button" class="icon-btn help-btn" data-help="netscan"
                   title="What do these fields do?" aria-label="Help: Network Scan"
                   aria-haspopup="dialog">
@@ -149,42 +182,59 @@
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
             </svg>
           </button>
-          <label class="field-label" for="target">Target</label>
-          <div class="input-group">
-            <input type="text" id="target" name="target" autocomplete="off" spellcheck="false"
-                   placeholder="192.168.1.10  or  host.local" required>
-            <button type="submit" id="scan-btn" class="btn-primary">Scan</button>
-          </div>
-          <!-- Fills the target with the router this host sits behind, so you can
-               scan it without knowing its address. The scan itself is an ordinary
-               one — every option below still applies. -->
-          <div class="detect-row">
-            <button type="button" class="btn-secondary" id="detect-router-btn">Detect my router</button>
-            <span class="detect-note" id="detect-router-note"></span>
+          <button type="button" class="icon-btn collapse-btn" id="netscan-collapse"
+                  aria-expanded="true" aria-controls="netscan-body"
+                  title="Collapse the target panel" aria-label="Collapse the target panel">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+
+          <!-- Only rendered while collapsed — see .card.is-collapsed in the CSS. -->
+          <div class="collapsed-summary">
+            <span class="collapsed-label">Target</span>
+            <span class="collapsed-value" id="netscan-summary">—</span>
           </div>
 
-          <div class="form-cols">
-            <fieldset class="opt-group">
-              <legend>Port range</legend>
-              <label class="opt"><input type="radio" name="ports" value="fast">
-                <span class="opt-body"><strong>Fast</strong></span></label>
-              <label class="opt"><input type="radio" name="ports" value="standard" checked>
-                <span class="opt-body"><strong>Standard</strong></span></label>
-              <label class="opt"><input type="radio" name="ports" value="full">
-                <span class="opt-body"><strong>Full</strong></span></label>
-            </fieldset>
+          <div class="card-body" id="netscan-body">
+            <label class="field-label" for="target">Target</label>
+            <div class="input-group">
+              <input type="text" id="target" name="target" autocomplete="off" spellcheck="false"
+                     placeholder="192.168.1.10  or  host.local" required>
+              <button type="submit" id="scan-btn" class="btn-primary">Scan</button>
+            </div>
+            <!-- Fills the target with the router this host sits behind, so you can
+                 scan it without knowing its address. The scan itself is an ordinary
+                 one — every option below still applies. -->
+            <div class="detect-row">
+              <button type="button" class="btn-secondary" id="detect-router-btn">Detect my router</button>
+              <span class="detect-note" id="detect-router-note"></span>
+            </div>
 
-            <fieldset class="opt-group">
-              <legend>Extra checks</legend>
-              <label class="opt"><input type="checkbox" name="sV" checked>
-                <span class="opt-body"><strong>Service &amp; version detection</strong></span></label>
-              <label class="opt"><input type="checkbox" name="os">
-                <span class="opt-body"><strong>OS detection</strong></span></label>
-              <label class="opt"><input type="checkbox" name="scripts">
-                <span class="opt-body"><strong>Default scripts</strong></span></label>
-              <label class="opt"><input type="checkbox" name="skip_ping">
-                <span class="opt-body"><strong>Skip host discovery</strong></span></label>
-            </fieldset>
+            <div class="form-cols">
+              <fieldset class="opt-group">
+                <legend>Port range</legend>
+                <label class="opt"><input type="radio" name="ports" value="fast">
+                  <span class="opt-body"><strong>Fast</strong></span></label>
+                <label class="opt"><input type="radio" name="ports" value="standard" checked>
+                  <span class="opt-body"><strong>Standard</strong></span></label>
+                <label class="opt"><input type="radio" name="ports" value="full">
+                  <span class="opt-body"><strong>Full</strong></span></label>
+              </fieldset>
+
+              <fieldset class="opt-group">
+                <legend>Extra checks</legend>
+                <label class="opt"><input type="checkbox" name="sV" checked>
+                  <span class="opt-body"><strong>Service &amp; version detection</strong></span></label>
+                <label class="opt"><input type="checkbox" name="os">
+                  <span class="opt-body"><strong>OS detection</strong></span></label>
+                <label class="opt"><input type="checkbox" name="scripts">
+                  <span class="opt-body"><strong>Default scripts</strong></span></label>
+                <label class="opt"><input type="checkbox" name="skip_ping">
+                  <span class="opt-body"><strong>Skip host discovery</strong></span></label>
+              </fieldset>
+            </div>
           </div>
         </form>
         </div>
@@ -467,6 +517,15 @@
     </main>
   </div>
 
+  <!-- ── Status bar ─────────────────────────────────────────────────────────
+       App on the left, version on the right. `.app-version` is also what the
+       saved-report builder reads for the "Version:" line in an exported report,
+       so the class has to survive any restyling here. -->
+  <footer class="app-statusbar">
+    <span class="app-name">SecAnalysis</span>
+    <span class="app-version" title="Application version">v{{ version }}</span>
+  </footer>
+
   <!-- Availability: add / edit a monitor. The fields live in a dialog rather
        than in the view, so the dashboard shows monitors instead of a form. Used
        for both Add (empty) and Edit (populated) — monitor-id decides which. -->
@@ -746,6 +805,10 @@
     <p>On each monitor: <strong>Check now</strong> runs it immediately,
       <strong>Pause</strong> stops it without deleting it, and <strong>Edit</strong> loads it
       back into this form. Export/Import live in Settings&nbsp;→&nbsp;Data.</p>
+    <p><strong>Enable notifications</strong> asks the browser for permission to raise a desktop
+      notification when a monitor goes down; it disappears once you have answered. To silence
+      them again afterwards, switch them off in Settings&nbsp;→&nbsp;General — the checks
+      themselves keep running either way.</p>
   </template>
 
   <template id="help-history" data-title="History">
@@ -802,15 +865,23 @@
       <section class="dlg-panel active" id="tab-appearance" role="tabpanel">
         <label class="field-label" for="theme-select">Theme</label>
         <select id="theme-select" class="theme-picker">
-          <option value="neon">Neon — dark terminal</option>
-          <option value="classic">Classic — blue</option>
-          <option value="github">GitHub — dark</option>
+          <option value="neon">Dark Terminal</option>
+          <option value="blue">Deep Blue</option>
           <option value="light">Light</option>
+          <option value="github">GitHub</option>
+          <option value="amber">Amber</option>
         </select>
         <p class="hint">Your choice is remembered on this browser.</p>
       </section>
       <section class="dlg-panel" id="tab-general" role="tabpanel" hidden>
-        <label class="field-label">Reset</label>
+        <label class="field-label">Availability notifications</label>
+        <label class="settings-check"><input type="checkbox" id="notify-enabled" checked>
+          <span>Notify me when a monitor goes down</span></label>
+        <p class="hint">Desktop notifications when a monitor goes down. Off silences them
+          only — the checks keep running server-side and Availability still shows
+          every state change.</p>
+
+        <label class="field-label settings-heading">Reset</label>
         <button class="btn-secondary" id="reset-all" type="button">Clear all results &amp; reset</button>
         <p class="hint">Clears every tool's results and returns to the default page.</p>
       </section>
@@ -997,13 +1068,40 @@
   </dialog>
 
   <script>
+  // ── Menu collapse ────────────────────────────────────────────────────────
+  // The header hamburger folds the function menu away for the full window width.
+  // Remembered per browser, like the target panel — someone working in the
+  // collapsed layout shouldn't have to re-collapse it on every load.
+  const NAV_KEY = 'secanalysis-nav-collapsed';
+  const menuBtn = document.getElementById('menu-btn');
+
+  function setNavCollapsed(collapsed) {
+    document.body.classList.toggle('nav-collapsed', collapsed);
+    menuBtn.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? 'Show the menu' : 'Collapse the menu';
+    menuBtn.title = label;
+    menuBtn.setAttribute('aria-label', label);
+    try { localStorage.setItem(NAV_KEY, collapsed ? '1' : '0'); } catch (e) {}
+  }
+  menuBtn.addEventListener('click', () => {
+    setNavCollapsed(!document.body.classList.contains('nav-collapsed'));
+  });
+  try {
+    setNavCollapsed(localStorage.getItem(NAV_KEY) === '1');
+  } catch (e) { setNavCollapsed(false); }
+
   // ── Theme switching ──────────────────────────────────────────────────────
   // The <head> applies the saved theme before paint; here we keep the picker in
   // sync and persist changes.
   const THEME_KEY = 'secanalysis-theme';
-  const THEMES = ['neon', 'classic', 'github', 'light'];
+  const THEMES = ['neon', 'blue', 'light', 'github', 'amber'];
+  // "classic" was this app's name for the deep-blue theme before the palettes
+  // were aligned with CyberNewsHub, where the same theme is "blue". Anyone who
+  // picked it still has the old id in localStorage; translate it on read.
+  const THEME_ALIASES = { classic: 'blue' };
   function currentTheme() {
-    const t = localStorage.getItem(THEME_KEY);
+    let t = localStorage.getItem(THEME_KEY);
+    t = THEME_ALIASES[t] || t;
     return THEMES.includes(t) ? t : 'neon';
   }
   function applyTheme(t) {
@@ -1485,6 +1583,35 @@ body{height:auto;overflow:auto;padding:28px;}
   const scanStatus = document.getElementById('scan-status');
   const scanResults = document.getElementById('scan-results');
 
+  // ── Collapsible target panel ─────────────────────────────────────────────
+  // Folding the form away hands its height to the results pane. The choice is
+  // remembered, so someone who works collapsed stays collapsed across reloads;
+  // the collapsed bar echoes the target so the state is never ambiguous.
+  const NETSCAN_COLLAPSE_KEY = 'secanalysis-netscan-collapsed';
+  const netscanCollapseBtn = document.getElementById('netscan-collapse');
+  const netscanSummary = document.getElementById('netscan-summary');
+  const targetInput = document.getElementById('target');
+
+  function syncNetscanSummary() {
+    netscanSummary.textContent = targetInput.value.trim() || '—';
+  }
+  function setNetscanCollapsed(collapsed) {
+    scanForm.classList.toggle('is-collapsed', collapsed);
+    netscanCollapseBtn.setAttribute('aria-expanded', String(!collapsed));
+    const label = collapsed ? 'Expand the target panel' : 'Collapse the target panel';
+    netscanCollapseBtn.title = label;
+    netscanCollapseBtn.setAttribute('aria-label', label);
+    if (collapsed) syncNetscanSummary();
+    try { localStorage.setItem(NETSCAN_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) {}
+  }
+  netscanCollapseBtn.addEventListener('click', () => {
+    setNetscanCollapsed(!scanForm.classList.contains('is-collapsed'));
+  });
+  targetInput.addEventListener('input', syncNetscanSummary);
+  try {
+    setNetscanCollapsed(localStorage.getItem(NETSCAN_COLLAPSE_KEY) === '1');
+  } catch (e) { setNetscanCollapsed(false); }
+
   // ── Detect my router ─────────────────────────────────────────────────────
   // Fills the target with the gateway the server found by tracing outward (see
   // detect_gateway in app.py). It only fills the field — scanning stays a
@@ -1508,6 +1635,7 @@ body{height:auto;overflow:auto;padding:28px;}
         return;
       }
       document.getElementById('target').value = d.ip;
+      syncNetscanSummary();   // a scripted .value never fires 'input'
       const name = d.dns && d.dns.hostname;
       // Say where it came from: on bridge networking hop 1 is the Docker host,
       // so "hop 2" is the honest answer to "why that address?".
@@ -3360,7 +3488,10 @@ body{height:auto;overflow:auto;padding:28px;}
   function notifyDashboard(d) {
     const fresh = d.events.filter(e => e.id > lastSeenEventId);
     if (d.events.length) lastSeenEventId = Math.max(lastSeenEventId, ...d.events.map(e => e.id));
-    if (dashPrimed && 'Notification' in window && Notification.permission === 'granted') {
+    // lastSeenEventId is advanced above regardless, so muting is a true mute:
+    // turning notifications back on doesn't replay everything missed meanwhile.
+    if (dashPrimed && notifyAllowed() && 'Notification' in window
+        && Notification.permission === 'granted') {
       for (const e of fresh.filter(e => e.to === 'down'))
         new Notification('SecAnalysis — monitor down', { body: `${e.name} is DOWN` });
     }
@@ -3391,11 +3522,28 @@ body{height:auto;overflow:auto;padding:28px;}
   }
   document.getElementById('dash-refresh').addEventListener('click', refreshDashboard);
 
-  // Notifications opt-in
+  // Notifications opt-in. Two independent gates: the browser permission, granted
+  // once from the button on the Availability card, and this app's own switch in
+  // Settings → General, which silences them without touching that permission
+  // (revoking a browser permission is a per-site chore buried in browser UI).
+  const NOTIFY_KEY = 'secanalysis-notify';
   const notifyBtn = document.getElementById('notify-enable');
-  function syncNotifyBtn() {
-    notifyBtn.hidden = !('Notification' in window) || Notification.permission !== 'default';
+  const notifyChk = document.getElementById('notify-enabled');
+
+  // Default on: the setting only exists to turn something off.
+  function notifyAllowed() {
+    try { return localStorage.getItem(NOTIFY_KEY) !== '0'; } catch (e) { return true; }
   }
+  function syncNotifyBtn() {
+    // Nothing to grant if the app is muted anyway, or if the answer is already in.
+    notifyBtn.hidden = !('Notification' in window)
+      || Notification.permission !== 'default' || !notifyAllowed();
+  }
+  notifyChk.checked = notifyAllowed();
+  notifyChk.addEventListener('change', () => {
+    try { localStorage.setItem(NOTIFY_KEY, notifyChk.checked ? '1' : '0'); } catch (e) {}
+    syncNotifyBtn();
+  });
   notifyBtn.addEventListener('click', async () => {
     try { await Notification.requestPermission(); } catch (e) {}
     syncNotifyBtn();
