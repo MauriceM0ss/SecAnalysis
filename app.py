@@ -2068,12 +2068,14 @@ def _csrf_guard():
 @app.after_request
 def _security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    # Allow embedding only in the CyberDash dashboard (localhost:5173);
-    # frame-ancestors blocks clickjacking from every other origin. This
-    # replaces X-Frame-Options, which can't allow-list a foreign origin.
+    # Allow embedding only in the CyberDash dashboard — both the browser build
+    # (http://localhost:5173) and the native Tauri .deb, whose webview origin is
+    # tauri://localhost. frame-ancestors blocks clickjacking from every other
+    # origin, and replaces X-Frame-Options (which can't allow-list a foreign
+    # origin).
     resp.headers.setdefault(
         "Content-Security-Policy",
-        "frame-ancestors 'self' http://localhost:5173")
+        "frame-ancestors 'self' http://localhost:5173 tauri://localhost")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
     return resp
 
