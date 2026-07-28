@@ -12,11 +12,21 @@
 /* ── Theming ──────────────────────────────────────────────────────────────
    The UI is driven by these tokens. A theme is picked via the `data-theme`
    attribute on <html> (set early in index.html to avoid a flash, switchable
-   from the sidebar). `--on-accent` is the text colour on an accent-filled
-   surface; `--accent-rgb` feeds the ambient glows; `--glow-logo` collapses to
-   `none` in the calm themes. */
+   from Settings → Appearance). `--on-accent` is the text colour on an
+   accent-filled surface; `--accent-rgb` feeds the ambient glows; `--glow-logo`
+   collapses to `none` in the calm themes.
 
-:root { --header-h: 56px; }   /* layout — theme-independent */
+   The palettes are the CyberNewsHub set — neon / blue / light / github / amber
+   — carried over under that app's theme names so a theme means the same thing
+   in both. Three tokens have no CyberNewsHub counterpart and are set per theme
+   here: `--bg-input` (a recessed field colour, one step under `--bg-surface`),
+   `--border-soft` (hairlines inside a card) and `--warn` (the amber "needs
+   attention" verdict, distinct from `--danger`). */
+
+:root {
+  --header-h:    56px;              /* layout — theme-independent */
+  --statusbar-h: 26px;
+}
 
 /* ── Neon — dark terminal (default). ── */
 :root, [data-theme="neon"] {
@@ -47,29 +57,29 @@
   --font-head:    "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-/* ── Classic — the original deep-blue theme. ── */
-[data-theme="classic"] {
-  --bg-base:      #070d18;
-  --bg-surface:   #0c1424;
-  --bg-elevated:  #15233f;
-  --bg-input:     #0a1322;
-  --border:       #213a63;
-  --border-soft:  #1a2e50;
-  --text:         #d6e4f7;
-  --text-muted:   #8198bd;
+/* ── Blue — deep blue. ── */
+[data-theme="blue"] {
+  --bg-base:      #05070e;
+  --bg-surface:   #0a0f1d;
+  --bg-elevated:  #111a30;
+  --bg-input:     #070b16;
+  --border:       #1d2942;
+  --border-soft:  #16203a;
+  --text:         #d3ddf2;
+  --text-muted:   #5f6c8a;
   --accent:       #3b82f6;
   --accent-strong:#60a5fa;
-  --accent2:      #8198bd;          /* labels plain muted */
-  --accent-dim:   rgba(59, 130, 246, .15);
+  --accent2:      #5f6c8a;          /* labels plain muted */
+  --accent-dim:   #0f2247;
   --accent-rgb:   59, 130, 246;
-  --danger:       #ff7b7b;
-  --warn:         #f0b429;
-  --on-accent:    #04101f;
-  --glow-logo:    0 0 18px rgba(59, 130, 246, .35);
+  --danger:       #ef4444;
+  --warn:         #fbbf24;
+  --on-accent:    #fff;
+  --glow-logo:    none;
   --sel-bg:       rgba(59, 130, 246, .3);
   --sel-fg:       #fff;
   --header-bg:    #000000;
-  --header-fg:    #8198bd;
+  --header-fg:    #8593b0;          /* --accent2 lifted; too dark on black */
   --header-logo:  #60a5fa;
   --radius:       10px;
   --font-mono:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -89,16 +99,17 @@
   --accent:       #2563eb;
   --accent-strong:#1d4ed8;
   --accent2:      #5c6781;
-  --accent-dim:   rgba(37, 99, 235, .12);
+  --accent-dim:   #dce8ff;
   --accent-rgb:   37, 99, 235;
   --danger:       #dc2626;
-  --warn:         #b45309;
+  --warn:         #b45309;           /* darker than the dark themes' amber, which
+                                        is unreadable on a white card */
   --on-accent:    #fff;
   --glow-logo:    none;
   --sel-bg:       rgba(37, 99, 235, .22);
   --sel-fg:       #0b1220;
   --header-bg:    #000000;
-  --header-fg:    #98a2b3;          /* the theme's own muted is too dark on black */
+  --header-fg:    #cbd5e1;          /* the theme's own muted is too dark on black */
   --header-logo:  #60a5fa;          /* likewise its accent-strong */
   --radius:       10px;
   --font-mono:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -143,6 +154,35 @@
                   Helvetica, Arial, sans-serif;
 }
 
+/* ── Amber. ── */
+[data-theme="amber"] {
+  --bg-base:      #0d0f14;
+  --bg-surface:   #141820;
+  --bg-elevated:  #1c2130;
+  --bg-input:     #0a0c11;
+  --border:       #252d3d;
+  --border-soft:  #1b2130;
+  --text:         #dde3ef;
+  --text-muted:   #6b7794;
+  --accent:       #f59e0b;
+  --accent-strong:#fbbf24;
+  --accent2:      #6b7794;          /* labels plain muted */
+  --accent-dim:   #3d2a00;
+  --accent-rgb:   245, 158, 11;
+  --danger:       #ef4444;
+  --warn:         #fbbf24;
+  --on-accent:    #000;
+  --glow-logo:    none;
+  --sel-bg:       rgba(245, 158, 11, .28);
+  --sel-fg:       #fff;
+  --header-bg:    #000000;
+  --header-fg:    #f0b45f;
+  --header-logo:  #fbbf24;
+  --radius:       10px;
+  --font-mono:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-head:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
 body {
   font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
@@ -178,9 +218,14 @@ code {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
 }
+/* Hamburger + wordmark share the header's first grid column. */
+.header-left { display: flex; align-items: center; gap: 10px; }
 .logo { display: flex; align-items: center; gap: 9px; font-family: var(--font-head); font-weight: 700; font-size: 1.05rem;
   color: var(--header-logo); text-shadow: var(--glow-logo); }
-.logo-icon { width: 26px; height: 26px; }
+/* The glyph is inline SVG filled with `currentColor`, so it inherits the colour
+   the wordmark above sets and follows the theme. `flex: none` stops it being
+   squeezed when the header is narrow. */
+.logo-icon { width: 26px; height: 26px; flex: none; }
 .header-title { justify-self: center; font-size: .72rem; font-weight: 600; letter-spacing: .22em;
   text-transform: uppercase; color: var(--header-fg); }
 
@@ -212,7 +257,20 @@ code {
 
 /* ── Layout ──────────────────────────────────────────────────────────────── */
 /* Fixed menu, main takes the rest. The menu width is set here and nowhere else. */
-.layout { display: grid; grid-template-columns: 220px 1fr; flex: 1; min-height: 0; }
+.layout { display: grid; grid-template-columns: 220px 1fr; flex: 1; min-height: 0;
+  transition: grid-template-columns .2s ease; }
+
+/* Menu collapsed by the header hamburger: the column goes to zero and the whole
+   width goes to the results. `overflow: hidden` and the zeroed padding keep the
+   menu's own content from spilling out of a box that no longer has room for it;
+   `min-width: 0` stops the grid honouring its intrinsic width instead of 0. */
+body.nav-collapsed .layout { grid-template-columns: 0 1fr; }
+body.nav-collapsed .sidebar {
+  min-width: 0; padding-left: 0; padding-right: 0;
+  /* border-right: none, not a transparent colour — a 1px border still forces the
+     track 1px wide, leaving a sliver of a column that should be gone. */
+  overflow: hidden; border-right: none;
+}
 
 /* ── Left menu ───────────────────────────────────────────────────────────── */
 .sidebar {
@@ -247,12 +305,19 @@ code {
 .menu-item.active .menu-text strong { color: var(--accent-strong); }
 .menu-text em { font-style: normal; font-size: .76rem; color: var(--text-muted); }
 
-/* Version status bar, pinned to the bottom-left of the sidebar. */
-.sidebar-status { margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid var(--border-soft);
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.sidebar-status .app-name { font-family: var(--font-head); font-weight: 600; font-size: .78rem;
+/* ── Status bar ──────────────────────────────────────────────────────────────
+   Full width under the sidebar and the main pane: app name left, version right.
+   `flex-shrink: 0` keeps it its own height while `.layout` above absorbs the
+   rest — body is a flex column of exactly header · layout · status bar. */
+.app-statusbar {
+  height: var(--statusbar-h); flex-shrink: 0;
+  background: var(--bg-surface); border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 16px; font-size: .76rem;
+}
+.app-statusbar .app-name { font-family: var(--font-head); font-weight: 600;
   color: var(--text-muted); }
-.sidebar-status .app-version { font-family: var(--font-mono); font-size: .75rem; font-weight: 600;
+.app-statusbar .app-version { font-family: var(--font-mono); font-weight: 600;
   color: var(--accent); }
 
 /* ── Settings dialog ─────────────────────────────────────────────────────── */
@@ -269,7 +334,13 @@ code {
      it to the top-left. */
   margin: auto;
   width: 460px; max-width: calc(100vw - 32px);
-  height: 380px; max-height: calc(100vh - 64px);
+  /* A floor rather than a fixed height: the two short tabs both sit at the floor
+     so switching between them doesn't resize anything, and General — the one tab
+     with more in it — grows to fit instead of scrolling inside a box that has
+     empty room on every other tab. `fit-content`, not `auto`: a <dialog> is
+     absolutely positioned with `inset: 0` by the UA stylesheet, so `auto` height
+     stretches it to the whole viewport. */
+  height: fit-content; min-height: 380px; max-height: calc(100vh - 64px);
   padding: 0; border: 1px solid var(--border); border-radius: 14px;
   background: var(--bg-surface); color: var(--text);
   box-shadow: 0 24px 60px rgba(0, 0, 0, .55), 0 0 40px rgba(var(--accent-rgb), .08);
@@ -295,6 +366,14 @@ code {
 .dlg-panel { display: none; flex-direction: column; gap: 4px; }
 .dlg-panel.active { display: flex; }
 .dlg-panel .hint { margin: 10px 0 0; }
+/* Separates a second setting from the hint text closing the one above it. */
+.dlg-panel .settings-heading { margin-top: 20px; }
+/* A settings toggle is one line, not a form option — .opt's padded card is too
+   heavy for a list of switches in a dialog this size. */
+.settings-check { display: flex; align-items: center; gap: 10px;
+  padding: 3px 0; font-size: .9rem; cursor: pointer; }
+.settings-check input { accent-color: var(--accent); width: 16px; height: 16px;
+  flex: none; cursor: pointer; }
 
 .dlg-foot { display: flex; justify-content: flex-end; gap: 10px;
   padding: 12px 20px 16px; border-top: 1px solid var(--border-soft); }
@@ -591,6 +670,31 @@ code {
    centres it against that label's line (22px card padding + half a label). */
 .card { position: relative; }
 .card > .help-btn { position: absolute; top: 16px; right: 16px; }
+
+/* ── Collapsible card (Network Scan's target panel) ──────────────────────────
+   Collapsed, the card is a one-line bar naming the current target and nothing
+   else, so the output pane below it takes the height the form gave up — the
+   `.view.active` grid sizes the input row to its content, so shrinking the card
+   grows the results on its own. The chevron sits left of the ? in the corner
+   and points up while the panel is open. */
+.card > .collapse-btn { position: absolute; top: 16px; right: 50px; }
+.collapse-btn svg { transition: transform .18s ease; }
+.card.collapsible:not(.is-collapsed) .collapse-btn svg { transform: rotate(180deg); }
+
+.collapsed-summary { display: none; }
+.card.is-collapsed { padding: 14px 22px; }
+.card.is-collapsed .card-body { display: none; }
+.card.is-collapsed .collapsed-summary {
+  display: flex; align-items: baseline; gap: 10px;
+  min-height: 28px;                 /* matches the corner buttons, so the bar
+                                       can't close up tighter than they are */
+  padding-right: 84px;              /* clear of the two absolute buttons */
+}
+.collapsed-label { font-weight: 600; font-size: .8rem; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--text-muted); flex: none; }
+.collapsed-value { font-family: "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: .92rem; color: var(--text); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .help-btn { width: 28px; height: 28px; }
 
 .help-dialog { width: 620px; }
@@ -917,10 +1021,22 @@ code {
 }
 
 @media (max-width: 720px) {
-  body { height: auto; overflow: auto; }
+  /* The hamburger widened the header's left column, so the centred subtitle runs
+     into the wordmark on a narrow window. Drop it here — the menu names the
+     current view anyway, and the header has no room to spare at this width. */
+  .header-title { display: none; }
+  .site-header { padding: 0 12px; }
+  /* The page scrolls as one document here rather than pinning panes to the
+     viewport. `min-height` keeps the status bar at the foot of a short page
+     instead of stranding it mid-screen; a long one just pushes it down. */
+  body { height: auto; min-height: 100vh; overflow: auto; }
   .main { overflow: visible; }
   .layout { grid-template-columns: 1fr; }
   .sidebar { height: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  /* The menu is a horizontal strip here, not a column, so collapsing it is a
+     hide rather than a zeroed grid track — the single-column grid stays. */
+  body.nav-collapsed .layout { grid-template-columns: 1fr; }
+  body.nav-collapsed .sidebar { display: none; }
   .sidebar-section { display: none; }
   .menu-item { white-space: nowrap; }
   .input-group { flex-direction: column; }

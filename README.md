@@ -135,8 +135,8 @@ things in the top bar.
   `dig`, `whois`. Deliberately **not** a shell: you pick a tool and supply one
   target, and every flag is pinned server-side.
 - **Reset** — clears all results and returns to the default view.
-- **Settings** — theme picker (neon / classic / github / light), monitor
-  export/import.
+- **Settings** — theme picker (Dark Terminal / Deep Blue / Light / GitHub /
+  Amber), an availability-notification switch, monitor export/import.
 
 ## Saved reports & saved scans
 
