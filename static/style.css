@@ -183,6 +183,28 @@
   --font-head:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* ── Pane rule ──────────────────────────────────────────────────────────────
+   The 1px lines dividing one structural region from another: header from body,
+   sidebar from content, status bar from content, dialog head/tabs/foot from the
+   panel between them. Split out of --border / --border-soft so they can be
+   switched off in one place without also flattening the cards, inputs, table
+   rows and scrollbars that share those tokens.
+
+   Declared once, outside the [data-theme] blocks on purpose: var() resolves at
+   use time, so `var(--border)` here means "whichever theme is live" — the
+   switch works across all five palettes without touching any of them.
+
+     transparent         lines off (current)
+     var(--border-soft)  lines back on, theme-correct
+
+   The same token exists in the other apps in the family (cyberdash,
+   cybernewshub, MyHours, subscriptions, peoplemanager), so they stay in step.
+   Per-record separators (.live-row, .data-table td) deliberately still use
+   --border-soft — this is region boundaries only. */
+:root {
+  --pane-rule: transparent;
+}
+
 body {
   font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
@@ -211,7 +233,7 @@ code {
   position: sticky; top: 0; z-index: 20;
   height: var(--header-h);
   background: var(--header-bg);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--pane-rule);
   box-shadow: 0 0 40px rgba(var(--accent-rgb), .08);
   padding: 0 22px;
   display: grid;
@@ -277,7 +299,7 @@ body.nav-collapsed .sidebar {
   height: 100%;
   overflow-y: auto;
   background: var(--bg-surface);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--pane-rule);
   padding: 18px 12px;
   display: flex; flex-direction: column; gap: 6px;
 }
@@ -311,7 +333,7 @@ body.nav-collapsed .sidebar {
    rest — body is a flex column of exactly header · layout · status bar. */
 .app-statusbar {
   height: var(--statusbar-h); flex-shrink: 0;
-  background: var(--bg-surface); border-top: 1px solid var(--border);
+  background: var(--bg-surface); border-top: 1px solid var(--pane-rule);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 16px; font-size: .76rem;
 }
@@ -350,11 +372,11 @@ body.nav-collapsed .sidebar {
 .settings-dialog::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(2px); }
 
 .dlg-head { display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 16px 12px 20px; border-bottom: 1px solid var(--border-soft); }
+  padding: 16px 16px 12px 20px; border-bottom: 1px solid var(--pane-rule); }
 .dlg-head h2 { font-family: var(--font-head); font-size: 1.05rem; font-weight: 600; color: var(--text); }
 .dlg-x { width: 30px; height: 30px; }
 
-.dlg-tabs { display: flex; gap: 4px; padding: 10px 16px 0; border-bottom: 1px solid var(--border-soft); }
+.dlg-tabs { display: flex; gap: 4px; padding: 10px 16px 0; border-bottom: 1px solid var(--pane-rule); }
 .dlg-tab { background: none; border: none; border-bottom: 2px solid transparent;
   color: var(--text-muted); font-family: inherit; font-size: .85rem; font-weight: 600;
   padding: 8px 12px; margin-bottom: -1px; cursor: pointer; transition: color .15s, border-color .15s; }
@@ -376,7 +398,7 @@ body.nav-collapsed .sidebar {
   flex: none; cursor: pointer; }
 
 .dlg-foot { display: flex; justify-content: flex-end; gap: 10px;
-  padding: 12px 20px 16px; border-top: 1px solid var(--border-soft); }
+  padding: 12px 20px 16px; border-top: 1px solid var(--pane-rule); }
 /* Caption in a dialog footer: margin-right:auto pushes the buttons to the far
    edge, so the note sits left and they stay right. */
 .dlg-note { font-size: .72rem; color: var(--text-muted); margin-right: auto; }
@@ -702,7 +724,7 @@ body.nav-collapsed .sidebar {
 .help-lead { font-size: .9rem; line-height: 1.6; color: var(--text); margin-bottom: 16px; }
 .help-dialog h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .09em;
   color: var(--accent2); margin: 20px 0 8px; padding-top: 14px;
-  border-top: 1px solid var(--border-soft); }
+  border-top: 1px solid var(--pane-rule); }
 .help-dialog p { font-size: .86rem; line-height: 1.6; color: var(--text-muted); margin: 10px 0; }
 .help-list { display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; margin: 0; }
 .help-list dt { font-size: .84rem; font-weight: 600; color: var(--text); }
@@ -1032,7 +1054,7 @@ body.nav-collapsed .sidebar {
   body { height: auto; min-height: 100vh; overflow: auto; }
   .main { overflow: visible; }
   .layout { grid-template-columns: 1fr; }
-  .sidebar { height: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  .sidebar { height: auto; flex-direction: row; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--pane-rule); }
   /* The menu is a horizontal strip here, not a column, so collapsing it is a
      hide rather than a zeroed grid track — the single-column grid stays. */
   body.nav-collapsed .layout { grid-template-columns: 1fr; }
