@@ -1,6 +1,12 @@
 /* ── Reset & base ──────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 [hidden] { display: none !important; }
+/* Stop WebKit rendering <select> as a native GTK widget, which ignores the CSS
+   background/color entirely and always draws the light-theme control. In a
+   browser it merely looks off; inside the packaged .deb (WebKitGTK) it renders
+   the theme picker as white-on-white and unreadable. The custom arrow the
+   native widget takes away is restored further down. */
+select { -webkit-appearance: none; appearance: none; }
 
 /* ── Dark scrollbars ───────────────────────────────────────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
@@ -391,7 +397,17 @@ body.nav-collapsed .sidebar {
 .dlg-tab.active { color: var(--accent-strong); border-bottom-color: var(--accent); }
 .dlg-tab:focus-visible { outline: none; color: var(--text); }
 
-.dlg-body { flex: 1; overflow-y: auto; padding: 18px 20px; }
+/* `flex: 1 1 auto`, not `flex: 1`. The shorthand `flex: 1` sets flex-basis to 0,
+   so the body's base size is 0 — and because `overflow-y: auto` makes it a
+   scroll container, its automatic minimum size resolves to 0 as well rather
+   than to its content. A <dialog> without an explicit height then has nothing
+   to size itself from and collapses to head + footer, with the whole body
+   hidden behind a scrollbar. Chromium papers over this; WebKitGTK — which is
+   what the packaged .deb runs on — does not, so the dialogs came out flat
+   there. Basing the flex on the content instead lets an auto-height dialog
+   size to fit, and `min-height: 0` still lets it shrink and scroll once
+   max-height caps it. */
+.dlg-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 18px 20px; }
 .dlg-panel { display: none; flex-direction: column; gap: 4px; }
 .dlg-panel.active { display: flex; }
 .dlg-panel .hint { margin: 10px 0 0; }
@@ -1072,4 +1088,18 @@ body.nav-collapsed .sidebar {
   .info-item, .kv-row { flex-direction: column; align-items: flex-start; gap: 5px; }
   .info-item span, .kv-val { text-align: left; }
   .kv-name { min-width: auto; }
+}
+
+/* ── Dropdown arrow for the custom selects ──────────────────────────────────
+   `appearance: none` at the top of this file stops WebKit drawing <select> as
+   a native GTK widget (see the note there), which also takes the arrow with
+   it. Put one back. Must come after the background: rules above, or those
+   would reset this background-image. */
+select.mon-input,
+.theme-picker {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b949e'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 8px 5px;
+  padding-right: 28px;
 }
