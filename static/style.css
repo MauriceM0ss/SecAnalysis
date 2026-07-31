@@ -261,8 +261,15 @@ code {
 .icon-btn:hover { color: var(--text); background: var(--bg-elevated); }
 .icon-btn:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 /* Header icons sit on black whatever the theme, so they can't use the shared
-   hover (light themes would put near-black text on a near-white chip here). */
-.site-header .icon-btn { color: var(--header-fg); }
+   hover (light themes would put near-black text on a near-white chip here).
+
+   The resting colour is a literal on-black grey rather than --header-fg: that
+   token also paints the subtitle, which is deliberately per-theme (cyan in Dark
+   Terminal, gold in Amber), and following it made the icon cluster shout in
+   those two while staying quiet in the other three. These buttons are
+   monochrome by design, so they're pinned to one neutral across all five — the
+   same value the other apps in the family use. */
+.site-header .icon-btn { color: rgba(230, 237, 242, .62); }
 .site-header .icon-btn:hover { color: #fff; background: rgba(255, 255, 255, .1); }
 
 /* Compact monochrome action buttons used inline inside result tables. */
