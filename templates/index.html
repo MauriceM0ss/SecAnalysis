@@ -1115,6 +1115,20 @@
   document.getElementById('theme-select')
     .addEventListener('change', e => applyTheme(e.target.value));
 
+  // ── Theme pushed by the CyberDash shell ──────────────────────────────────
+  // CyberDash embeds this app and broadcasts whichever theme it's set to, so
+  // the family restyles together instead of app by app. What arrives is checked
+  // against this app's own themes rather than trusted — the shell doesn't get to
+  // invent one, and an unknown value is ignored outright. The sender isn't
+  // checked, because the most a message can do here is pick a colour scheme.
+  window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg || msg.type !== 'cyberdash:theme') return;
+    if (!THEMES.includes(msg.theme)) return;
+    applyTheme(msg.theme);
+  });
+
+
   // ── Help dialog ──────────────────────────────────────────────────────────
   // Each function's ? button names a <template id="help-…">; its content is
   // cloned in on open. Delegated from the document because the buttons sit in
