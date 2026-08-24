@@ -494,6 +494,8 @@ body.nav-collapsed .sidebar {
   border: 1px solid currentColor; vertical-align: middle; }
 .host-badge.new { color: var(--accent); }
 .host-badge.gone { color: var(--text-muted); }
+/* A scorecard check whose grade moved between two runs of a saved scan. */
+.host-badge.moved { color: var(--warn); }
 .row-gone td { opacity: .55; }
 /* Notes are kept to a single line so a long one can't stretch the row; the full
    text is on the cell's tooltip and in the note dialog. Generated reports
@@ -877,6 +879,13 @@ body.nav-collapsed .sidebar {
 .score-cat { font-weight: 600; color: var(--text); min-width: 170px; }
 .score-detail { text-align: right; color: var(--text-muted); font-size: .88rem; }
 .score-note { margin-top: 12px; font-size: .8rem; }
+/* Saved scans only: a note on one check, and a check that was graded last time
+   but isn't part of this run any more. */
+.score-annotation { margin: -4px 12px 0; padding: 7px 11px; border-left: 2px solid var(--border);
+  background: var(--bg-surface); border-radius: 0 6px 6px 0; font-size: .8rem;
+  color: var(--text-muted); white-space: pre-wrap; word-break: break-word; }
+.score-row.is-gone { opacity: .55; }
+.score-row .row-actions { flex-shrink: 0; margin-left: 0; }
 
 /* ── TLS protocol tags + CSP/HSTS issue rows ─────────────────────────────── */
 .proto-block { margin-top: 14px; }

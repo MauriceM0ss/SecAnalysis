@@ -729,6 +729,237 @@ def get_email_security(hostname: str) -> dict:
             "mtaSts": get_mta_sts(hostname), "tlsRpt": get_tls_rpt(hostname)}
 
 
+# ── WHOIS: who registered the domain, when, and for how much longer ─────────
+# `whois` is a plain TCP/43 protocol with no schema: every registry answers in
+# its own layout, so the parse below is deliberately forgiving — it maps a pile
+# of observed key spellings onto a handful of fields and keeps the raw record
+# for anything it didn't recognise.
+WHOIS_TIMEOUT = 15          # per lookup; the walk below does at most 3
+WHOIS_MAX_RAW = 16 * 1024   # what we hand back for the "raw record" pane
+
+# Field → the key spellings seen in the wild, lower-cased and stripped. Matching
+# is exact on the key, so `registrar` never swallows `registrar abuse contact`.
+WHOIS_FIELDS = {
+    "registrar":    ("registrar", "registrar name", "sponsoring registrar", "registrar organization"),
+    "registrarUrl": ("registrar url", "registrar website", "url"),
+    "abuseEmail":   ("registrar abuse contact email", "abuse-mailbox"),
+    "created":      ("creation date", "created", "created on", "created date",
+                     "registered on", "registration time", "domain registration date",
+                     "registered", "record created"),
+    "updated":      ("updated date", "last updated", "last modified", "changed",
+                     "last-update", "modified", "record last updated"),
+    "expires":      ("registry expiry date", "registrar registration expiration date",
+                     "expiry date", "expiration date", "expires", "expires on",
+                     "paid-till", "renewal date", "expiration time"),
+    "registrant":   ("registrant organization", "registrant org", "registrant name",
+                     "org", "organization", "organisation", "holder"),
+    "country":      ("registrant country", "country"),
+    "dnssec":       ("dnssec",),
+}
+# Multi-valued keys: a record lists one name server / status per line.
+WHOIS_MULTI = {
+    "nameServers": ("name server", "nserver", "nameserver", "name servers", "domain nameservers"),
+    "statuses":    ("domain status", "status", "state"),
+}
+# A registry that has never heard of the name says so in prose, not a status
+# code — so the "did this resolve to a real registration?" test is textual.
+WHOIS_NOT_FOUND = (
+    "no match for", "not found", "no data found", "no entries found",
+    "no object found", "domain not found", "nothing found", "status: free",
+    "status: available", "% no entries", "malformed request",
+)
+# Privacy services and GDPR redaction blank out the human fields. Worth calling
+# out as "withheld" rather than showing the placeholder as if it were an answer.
+WHOIS_REDACTED = ("redacted", "data protected", "privacy", "not disclosed",
+                  "gdpr", "withheld", "statutory masking", "non-public data")
+
+# What a continuation line must *not* look like for it to still belong to the
+# block above it: a short alphabetic label followed by a colon.
+_WHOIS_KEY_RE = re.compile(r"^\s*[A-Za-z][A-Za-z0-9 _/-]{0,40}:")
+
+WHOIS_DATE_FORMATS = (
+    "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y.%m.%d",
+    "%d-%b-%Y", "%d.%m.%Y", "%Y/%m/%d", "%b %d %Y", "%d %b %Y",
+)
+
+
+def _whois_date(value: str):
+    """One WHOIS date string → an aware UTC datetime, or None.
+
+    Registries disagree on format and on whether a zone is present; anything
+    without one is read as UTC, which is what the RDAP-era registries mean."""
+    if not value:
+        return None
+    txt = value.strip().rstrip(".")
+    # Trailing zone markers: "Z", "+00:00", "(UTC)", "UTC". Strip rather than
+    # parse — the offset only ever shifts the answer by hours, and every use
+    # below is a day count.
+    txt = re.sub(r"\s*\((?:[A-Z]{2,5})\)$", "", txt)
+    txt = re.sub(r"\s+(?:UTC|GMT)$", "", txt)
+    # Both cuts below only fire straight after a digit / a clock time, so the
+    # "-1996" of `01-Aug-1996` isn't mistaken for a `-19:96` UTC offset and the
+    # ".1996" of `01.08.1996` isn't mistaken for fractional seconds.
+    txt = re.sub(r"(?<=\d)(?:Z|\s*[+-]\d{2}:?\d{2})$", "", txt).strip()
+    txt = re.sub(r"(?<=\d{2}:\d{2}:\d{2})\.\d+$", "", txt)
+    for fmt in WHOIS_DATE_FORMATS:
+        try:
+            return datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _whois_lines(text: str):
+    """Yield (lower-cased key, value) for the `key: value` lines in a record.
+
+    Comment banners and the legal boilerplate registries append are skipped. A
+    key with nothing after its colon opens an indented block — `.nl` lists name
+    servers and `.uk` names its registrar that way — so every indented line
+    under it is yielded against that same key."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped[0] in "%#>*" or ":" not in stripped:
+            continue
+        key, _, value = stripped.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if not key:
+            continue
+        if value:
+            yield key, value
+            continue
+        for cont in lines[i + 1:]:
+            # The block ends at the first blank line, unindented line, or line
+            # that is itself a `key: value` pair. That last test is on the shape
+            # of the label, not the mere presence of a colon: Nominet lists name
+            # servers with their IPv6 glue, which is full of colons.
+            if not cont.strip() or not cont[:1].isspace() or _WHOIS_KEY_RE.match(cont):
+                break
+            yield key, cont.strip()
+
+
+def _is_ip(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_redacted(value: str) -> bool:
+    low = value.lower()
+    return any(m in low for m in WHOIS_REDACTED)
+
+
+def parse_whois(text: str) -> dict:
+    """A raw WHOIS record → the fields the analyzer reports on.
+
+    First value wins for single-valued fields: thin registries print the
+    registry's answer first and the registrar's echo of it after, and the
+    registry copy is the authoritative one."""
+    out = {k: None for k in WHOIS_FIELDS}
+    out.update({k: [] for k in WHOIS_MULTI})
+    out["redacted"] = False
+
+    for key, value in _whois_lines(text):
+        for field, keys in WHOIS_FIELDS.items():
+            if key in keys and out[field] is None:
+                if _is_redacted(value):
+                    out["redacted"] = True
+                else:
+                    out[field] = value
+        for field, keys in WHOIS_MULTI.items():
+            if key not in keys:
+                continue
+            if field == "statuses":
+                # ICANN registries append the EPP status URL and ".uk" writes a
+                # whole sentence, so a status is kept as prose — only the link
+                # is dropped. Name servers, by contrast, do split on whitespace:
+                # some registries put the glue address on the same line.
+                # "clientTransferProhibited https://icann.org/epp#..." and the
+                # registrar's "clientTransferProhibited (https://…)" echo of it
+                # are the same status; keep the bare label so it lands once.
+                label = value.split("https://")[0].strip(" (\t")
+                if label and label.lower() not in {t.lower() for t in out["statuses"]}:
+                    out["statuses"].append(label)
+                continue
+            for item in re.split(r"[,\s]+", value):
+                item = item.strip().rstrip(".")
+                # Several registries print the glue address after the name
+                # ("nserver: ns1.example.ru. 93.158.134.1"); the address isn't
+                # a second name server.
+                if not item or _is_ip(item):
+                    continue
+                if item.lower() not in {n.lower() for n in out[field]}:
+                    out[field].append(item)
+
+    now = datetime.now(timezone.utc)
+    created, expires = _whois_date(out["created"]), _whois_date(out["expires"])
+    out["ageDays"] = (now - created).days if created else None
+    out["daysUntilExpiry"] = (expires - now).days if expires else None
+    out["dnssecSigned"] = (out["dnssec"] or "").lower().startswith(("signed", "yes", "active"))
+    return out
+
+
+def _run_whois(domain: str):
+    """One `whois` lookup. Returns (output, error). Never raises."""
+    try:
+        proc = subprocess.run(["whois", "--", domain], capture_output=True,
+                              text=True, timeout=WHOIS_TIMEOUT)
+        return (proc.stdout or "") + (proc.stderr or ""), None
+    except subprocess.TimeoutExpired:
+        return "", "WHOIS lookup timed out after %ss" % WHOIS_TIMEOUT
+    except FileNotFoundError:
+        return "", "whois is not installed in this container"
+    except OSError as e:
+        return "", "WHOIS lookup failed: %s" % e
+
+
+def get_whois(hostname: str) -> dict:
+    """Registration data for the domain behind a hostname.
+
+    Registries only hold records for registrable domains, so `www.example.com`
+    gets a "no match" and the real record lives on `example.com`. We walk from
+    the full hostname up through its parents and keep the first record that
+    looks like a registration — which also lands on the right label for
+    multi-label suffixes like `co.uk`, without a Public Suffix List."""
+    if not is_valid_target(hostname):
+        return {"queried": None, "found": False, "error": "Invalid hostname"}
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        # A literal IP has no domain registration; the answer would be the
+        # netblock's RIR record, which isn't what this card claims to show.
+        return {"queried": hostname, "found": False,
+                "error": "No domain registration — the target is an IP address"}
+
+    last_error = None
+    for domain in _domain_candidates(hostname.lower().rstrip("."))[:3]:
+        text, err = _run_whois(domain)
+        if err:
+            last_error = err
+            # Not installed is fatal for every candidate; a timeout may not be.
+            if "not installed" in err:
+                break
+            continue
+        low = text.lower()
+        if not text.strip() or any(m in low for m in WHOIS_NOT_FOUND):
+            continue
+        record = parse_whois(text)
+        # A record with none of the registration anchors is a referral stub or
+        # a rate-limit notice, not an answer worth reporting.
+        if not any(record[k] for k in ("registrar", "created", "expires", "nameServers")):
+            continue
+        raw = text if len(text) <= WHOIS_MAX_RAW else text[:WHOIS_MAX_RAW] + "\n… record truncated"
+        record.update({"queried": domain, "found": True, "error": None, "raw": raw})
+        return record
+
+    return {"queried": _domain_candidates(hostname)[-1], "found": False,
+            "error": last_error or "No registration record found"}
+
+
 # ── Header quality: CSP and HSTS aren't just present/absent ─────────────────
 def _parse_csp(value: str) -> dict:
     """CSP text → {directive: [sources]}. Directive names are lower-cased."""
@@ -2182,19 +2413,24 @@ def subnet_scan():
     return jsonify(err or payload), status
 
 
-@app.route("/api/analyze", methods=["POST"])
-def analyze():
-    data = request.get_json(silent=True) or {}
-    url = (data.get("url") or "").strip()
-    do_port_scan = bool(data.get("portScan"))
-    do_dns_auth = bool(data.get("dnsAuth"))
-    auth = _basic_auth_header((data.get("username") or "").strip(), data.get("password") or "")
+def run_url_analysis(url: str, opts: dict, auth=None):
+    """Analyze one URL. Returns (payload, error_payload, status) — exactly one of
+    payload / error_payload is set. Shared by the live endpoint and by refreshing
+    a saved scan, so both produce the same shape.
+
+    `opts` carries the three checks that cost real time and are therefore opt-in
+    (portScan / dnsAuth / whois); it travels back out in the payload so a saved
+    scan refreshes with the same checks it was saved with."""
+    url = (url or "").strip()
+    do_port_scan = bool(opts.get("portScan"))
+    do_dns_auth = bool(opts.get("dnsAuth"))
+    do_whois = bool(opts.get("whois"))
 
     if not url:
-        return jsonify({"error": "URL is required"}), 400
+        return None, {"error": "URL is required"}, 400
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return jsonify({"error": "Enter a valid http:// or https:// URL"}), 400
+        return None, {"error": "Enter a valid http:// or https:// URL"}, 400
 
     try:
         ip_address = socket.gethostbyname(parsed.hostname)
@@ -2219,6 +2455,8 @@ def analyze():
     if do_port_scan and ip_address != "Unable to resolve":
         port_scan = nmap_port_scan(ip_address)
 
+    whois_record = get_whois(parsed.hostname) if do_whois else None
+
     dmarc = get_dmarc(parsed.hostname) if do_dns_auth else None
     dnssec = get_dnssec(parsed.hostname) if do_dns_auth else None
     email_sec = get_email_security(parsed.hostname) if do_dns_auth else {}
@@ -2241,6 +2479,7 @@ def analyze():
         "robotsTxt": fetch_text_file(parsed, "/robots.txt", auth),
         "certInfo": cert_info,
         "dnsRecords": get_dns_records(parsed.hostname),
+        "whois": whois_record,
         "dmarc": dmarc,
         "dnssec": dnssec,
         "spf": email_sec.get("spf"),
@@ -2253,10 +2492,22 @@ def analyze():
         "pageContent": analyze_page_content(page_html, final_url),
         "cookies": get_cookies(url, auth),
         "portScan": port_scan,
+        "options": {"portScan": do_port_scan, "dnsAuth": do_dns_auth, "whois": do_whois},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     result["scorecard"] = grade_analysis(result)
-    return jsonify(result)
+    return result, None, 200
+
+
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    data = request.get_json(silent=True) or {}
+    auth = _basic_auth_header((data.get("username") or "").strip(), data.get("password") or "")
+    payload, err, status = run_url_analysis(
+        (data.get("url") or "").strip(),
+        {k: bool(data.get(k)) for k in ("portScan", "dnsAuth", "whois")},
+        auth)
+    return jsonify(err or payload), status
 
 
 @app.route("/api/subdomains", methods=["POST"])
@@ -2971,11 +3222,17 @@ def history_delete(tool, name):
 # SAVED_SCAN_TOOLS:
 #   target_of  payload            -> the target it was run against
 #   validate   raw target         -> (canonical target, error)
-#   clean      (payload, target)  -> just the fields we store (never trust the
-#                                    client's extras — the payload round-trips
-#                                    through the browser before being saved)
-#   sweep      target             -> (payload, error_payload, status), i.e. the
-#                                    same contract the live endpoints use
+#   clean      (payload, target, previous) -> just the fields we store (never
+#                                    trust the client's extras — the payload
+#                                    round-trips through the browser before being
+#                                    saved). `previous` is the payload this one
+#                                    replaces on a refresh, or None on a first
+#                                    save; only tools that diff themselves use it.
+#   sweep      (target, previous) -> (payload, error_payload, status), i.e. the
+#                                    same contract the live endpoints use. The
+#                                    previously stored payload comes along so a
+#                                    tool can re-run with the options it was
+#                                    saved with; most tools ignore it.
 #   items      payload            -> the list that diffs and notes are keyed on
 #   key        item               -> that item's stable identity
 MAX_SCAN_NAME = 80
@@ -2994,7 +3251,7 @@ def _validate_domain_target(raw):
     return domain, None
 
 
-def _clean_subnet_result(data, target):
+def _clean_subnet_result(data, target, prev=None):
     hosts = [{"ip": h.get("ip"), "hostname": h.get("hostname"), "mac": h.get("mac"),
               "vendor": h.get("vendor"), "reason": h.get("reason", "")}
              for h in data.get("hosts", []) if isinstance(h, dict)]
@@ -3003,7 +3260,7 @@ def _clean_subnet_result(data, target):
             "stderr": str(data.get("stderr") or "")}
 
 
-def _clean_subdomain_result(data, target):
+def _clean_subdomain_result(data, target, prev=None):
     names = [{"name": n.get("name"), "resolves": bool(n.get("resolves")),
               "addresses": [str(a) for a in (n.get("addresses") or [])]}
              for n in data.get("names", []) if isinstance(n, dict) and n.get("name")]
@@ -3011,6 +3268,69 @@ def _clean_subdomain_result(data, target):
             "resolvingCount": sum(1 for n in names if n["resolves"]),
             "truncated": bool(data.get("truncated")),
             "sources": [str(s) for s in (data.get("sources") or [])]}
+
+
+def _validate_url_target(raw):
+    url = (raw or "").strip()[:500]
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None, "Enter a valid http:// or https:// URL"
+    return url, None
+
+
+# Everything the URL report renders. The payload round-trips through the browser
+# before it is saved, so only these keys survive — and the two the engine steers
+# by (the target and the item list) are rebuilt field by field below.
+URL_SCAN_KEYS = (
+    "ipAddress", "statusCode", "responseTimeMs", "server", "securityHeaders",
+    "cspAnalysis", "hstsAnalysis", "securityTxt", "robotsTxt", "certInfo",
+    "dnsRecords", "whois", "dmarc", "dnssec", "spf", "dkim", "mtaSts", "tlsRpt",
+    "redirectChain", "redirectIssues", "httpsRedirect", "pageContent", "cookies",
+    "portScan", "timestamp",
+)
+
+
+def _url_grade_changes(prev, categories):
+    """Which checks changed grade since the previous run.
+
+    The generic new/gone diff can't say anything useful here: the scorecard
+    always reports the same categories, so nothing ever appears or disappears.
+    What actually moves is the grade — that's what a refresh is for."""
+    if not isinstance(prev, dict):
+        return []
+    was = {c.get("name"): c.get("grade")
+           for c in ((prev.get("scorecard") or {}).get("categories") or [])
+           if isinstance(c, dict)}
+    return [{"name": c["name"], "from": was[c["name"]], "to": c["grade"]}
+            for c in categories
+            if c["name"] in was and was[c["name"]] != c["grade"]]
+
+
+def _clean_url_result(data, target, prev=None):
+    """A URL analysis reduced to what gets stored.
+
+    The saved-scan engine keys notes and diffs on a list of items; for this tool
+    that list is the scorecard's categories, so a note lands on a check ("we
+    accept the missing CSP because …") and a refresh reports checks that appeared
+    or disappeared. Options are stored too — without them a refresh would quietly
+    drop the port scan / DNS / WHOIS sections the scan was saved with. Basic-auth
+    credentials are deliberately *not* stored, so a refresh re-runs anonymously."""
+    out = {k: data.get(k) for k in URL_SCAN_KEYS if k in data}
+    sc = data.get("scorecard") if isinstance(data.get("scorecard"), dict) else {}
+    out["url"] = target
+    out["scorecard"] = {
+        "score": sc.get("score"),
+        "rating": sc.get("rating"),
+        "categories": [{"name": str(c.get("name")), "grade": str(c.get("grade") or "na"),
+                        "detail": str(c.get("detail") or "")}
+                       for c in (sc.get("categories") or [])
+                       if isinstance(c, dict) and c.get("name")],
+    }
+    opts = data.get("options") if isinstance(data.get("options"), dict) else {}
+    out["options"] = {k: bool(opts.get(k)) for k in ("portScan", "dnsAuth", "whois")}
+    out["changes"] = _url_grade_changes(prev, out["scorecard"]["categories"])
+    out["previousScore"] = (prev.get("scorecard") or {}).get("score") if prev else None
+    return out
 
 
 SAVED_SCAN_TOOLS = {
@@ -3023,16 +3343,27 @@ SAVED_SCAN_TOOLS = {
         # refresh runs, not when this dict is built — otherwise the entry pins the
         # original function object and no later rebinding (a test double, say) is
         # ever seen.
-        "sweep": lambda target: run_subnet_sweep(target),
+        "sweep": lambda target, prev: run_subnet_sweep(target),
         "items": lambda d: d.get("hosts", []),
         "key": lambda i: i.get("ip"),
+    },
+    "url": {
+        # Not a list of hosts like the other two: the analysis is one report, and
+        # its scorecard categories are the items notes and diffs hang off.
+        "items_key": "scorecard",
+        "target_of": lambda d: (d.get("url") or "").strip(),
+        "validate": _validate_url_target,
+        "clean": _clean_url_result,
+        "sweep": lambda target, prev: run_url_analysis(target, (prev or {}).get("options") or {}),
+        "items": lambda d: ((d.get("scorecard") or {}).get("categories") or []),
+        "key": lambda i: i.get("name"),
     },
     "subdomains": {
         "items_key": "names",
         "target_of": lambda d: (d.get("domain") or "").strip(),
         "validate": _validate_domain_target,
         "clean": _clean_subdomain_result,
-        "sweep": lambda target: run_subdomain_scan(target),
+        "sweep": lambda target, prev: run_subdomain_scan(target),
         "items": lambda d: d.get("names", []),
         "key": lambda i: i.get("name"),
     },
@@ -3114,7 +3445,9 @@ def create_saved_scan():
     data = body.get("data")
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    if not isinstance(data, dict) or not isinstance(data.get(spec["items_key"]), list):
+    # items_key names the structure a real result must carry — a list of rows for
+    # the sweep tools, the scorecard object for the URL analyzer.
+    if not isinstance(data, dict) or not isinstance(data.get(spec["items_key"]), (list, dict)):
         return jsonify({"error": "A scan result is required"}), 400
 
     target, err = spec["validate"](spec["target_of"](data))
@@ -3194,17 +3527,18 @@ def refresh_saved_scan(sid):
         spec = SAVED_SCAN_TOOLS.get(tool)
         if not spec:
             return jsonify({"error": "Unknown tool"}), 400
-        old_items = spec["items"](json.loads(row["data"]))
+        old_data = json.loads(row["data"])
+        old_items = spec["items"](old_data)
     finally:
         conn.close()
 
     # Re-run outside the DB connection: a sweep can take minutes, and holding the
     # connection would block the scheduler's writes for that whole time.
-    payload, err, status = spec["sweep"](target)
+    payload, err, status = spec["sweep"](target, old_data)
     if err:
         return jsonify(err), status
 
-    clean = spec["clean"](payload, target)
+    clean = spec["clean"](payload, target, old_data)
     new_keys, gone_items = _diff_items(old_items, spec["items"](clean), spec["key"])
     ts = _now()
     conn = get_db()
@@ -3224,7 +3558,11 @@ def refresh_saved_scan(sid):
         conn.close()
 
 
-@app.route("/api/saved-scans/<int:sid>/notes/<host>", methods=["PUT"])
+# <path:…> because an item key isn't always a hostname: the URL analyzer keys its
+# notes on scorecard category names, and "TLS/SSL" has a slash in it. The key is
+# only ever a lookup into this scan's own items (see _known_keys below), never a
+# path, so letting it carry a slash costs nothing.
+@app.route("/api/saved-scans/<int:sid>/notes/<path:host>", methods=["PUT"])
 def set_host_note(sid, host):
     note = ((request.get_json(silent=True) or {}).get("note") or "").strip()[:MAX_NOTE_CHARS]
     conn = get_db()
