@@ -128,9 +128,20 @@
       <!-- Saved subnet scans, nested under their tool. Populated from
            /api/subnet-scans; stays empty (and takes no space) until you save one. -->
       <div class="submenu" id="subnet-submenu" role="group" aria-label="Saved subnet scans"></div>
-      <button class="menu-item" data-view="url">
-        <span class="menu-text"><strong>URL Analyzer</strong></span>
-      </button>
+      <div class="menu-row">
+        <button class="menu-item" data-view="url">
+          <span class="menu-text"><strong>URL Analyzer</strong></span>
+        </button>
+        <button class="submenu-toggle" id="url-toggle" type="button" hidden
+                aria-expanded="true" aria-controls="url-submenu"
+                aria-label="Collapse saved scans" title="Collapse saved scans">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
+      <div class="submenu" id="url-submenu" role="group" aria-label="Saved URL analyses"></div>
       <button class="menu-item" data-view="exposure">
         <span class="menu-text"><strong>Exposure Probe</strong></span>
       </button>
@@ -281,7 +292,9 @@
       <!-- ═══ View: URL Analyzer ══════════════════════════════════════ -->
       <section class="view" id="view-url">
         <div class="pane-input">
-        <form id="url-form" class="card">
+        <!-- Collapses to a one-line bar, exactly as the Network Scan target
+             panel does: a URL report is long, and the pane is worth the space. -->
+        <form id="url-form" class="card collapsible">
           <button type="button" class="icon-btn help-btn" data-help="url"
                   title="What do these fields do?" aria-label="Help: URL Analyzer"
                   aria-haspopup="dialog">
@@ -292,6 +305,22 @@
               <line x1="12" y1="17" x2="12.01" y2="17"></line>
             </svg>
           </button>
+          <button type="button" class="icon-btn collapse-btn" id="url-collapse"
+                  aria-expanded="true" aria-controls="url-body"
+                  title="Collapse the target panel" aria-label="Collapse the target panel">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+
+          <!-- Only rendered while collapsed — see .card.is-collapsed in the CSS. -->
+          <div class="collapsed-summary">
+            <span class="collapsed-label">URL</span>
+            <span class="collapsed-value" id="url-summary">—</span>
+          </div>
+
+          <div class="card-body" id="url-body">
           <label class="field-label" for="url">URL</label>
           <div class="input-group">
             <input type="text" id="url" name="url" autocomplete="off" spellcheck="false"
@@ -305,6 +334,8 @@
                 <span class="opt-body"><strong>Scan the first 1024 ports</strong></span></label>
               <label class="opt"><input type="checkbox" name="dnsAuth">
                 <span class="opt-body"><strong>DNS &amp; email security (DMARC, DNSSEC, SPF, DKIM, MTA-STS, TLS-RPT)</strong></span></label>
+              <label class="opt"><input type="checkbox" name="whois">
+                <span class="opt-body"><strong>WHOIS registration (registrar, domain age, expiry, name servers)</strong></span></label>
             </fieldset>
 
             <fieldset class="opt-group">
@@ -316,6 +347,7 @@
                        placeholder="Password">
               </div>
             </fieldset>
+          </div>
           </div>
         </form>
         </div>
@@ -702,10 +734,25 @@
       <dd>DMARC policy — following parent-domain inheritance for subdomains — a DNSSEC
         signing check, and the full mail-security posture (SPF, DKIM selectors, MTA-STS,
         TLS-RPT). CAA is always shown under DNS Records, with or without this option.</dd>
+      <dt>WHOIS registration</dt>
+      <dd>Queries the registry for the domain behind the URL — registrar, registrant,
+        creation/expiry dates, name servers and status codes, plus the raw record. The
+        lookup walks up from the hostname to the registrable domain, so
+        <code>www.example.co.uk</code> is answered by <code>example.co.uk</code>. A domain
+        registered in the last month, or one about to expire, is called out: both are
+        common on throwaway phishing hosts. Most registries redact contact details.</dd>
     </dl>
     <h4>Basic authentication <span class="help-note">optional</span></h4>
     <p>For URLs behind HTTP Basic Auth. Sent as an <code>Authorization</code> header on the
       HEAD/GET/redirect/cookie probes. Leave both boxes empty if the site is public.</p>
+    <h4>Saving an analysis</h4>
+    <p><strong>Save scan</strong> keeps the result under this tool in the menu. Reopening it
+      restores the report, the URL and the options it was run with; <strong>Refresh</strong>
+      re-runs those same checks and marks any scorecard check whose grade moved, alongside the
+      previous score. Each check takes a <strong>note</strong>, which survives every refresh.
+      Credentials are never stored, so a refresh of a Basic-auth URL runs anonymously.</p>
+    <p>The chevron beside the <strong>?</strong> folds this panel down to a one-line bar when
+      you want the whole pane for the report.</p>
   </template>
 
   <template id="help-exposure" data-title="Exposure Probe">
@@ -1554,6 +1601,45 @@ body{height:auto;overflow:auto;padding:28px;}
                       subdomains: 'Subdomain Discovery', dashboard: 'Availability Dashboard',
                       history: 'Saved Reports' };
   let currentView = 'netscan';
+  // ── Collapsible input panel (Network Scan, URL Analyzer) ─────────────────
+  // Folding the form away hands its height to the results pane. The choice is
+  // remembered per tool, so someone who works collapsed stays collapsed across
+  // reloads; the collapsed bar echoes the target so the state is never
+  // ambiguous. Expects the card markup to carry `.collapsible`, a `.card-body`,
+  // a `.collapsed-summary`, and a `#<tool>-collapse` chevron.
+  // `legacyKey` is where this panel's state used to live, read once so an
+  // existing preference survives the rename; it can go when nobody's browser
+  // still holds the old key.
+  function makeCollapsibleCard(tool, card, input, legacyKey) {
+    const KEY = `secanalysis-${tool}-panel-collapsed`;
+    const btn = document.getElementById(`${tool}-collapse`);
+    const summary = document.getElementById(`${tool}-summary`);
+    if (!btn || !card) return;
+
+    const syncSummary = () => {
+      summary.textContent = (input && input.value.trim()) || '—';
+    };
+    function set(collapsed) {
+      card.classList.toggle('is-collapsed', collapsed);
+      btn.setAttribute('aria-expanded', String(!collapsed));
+      const label = collapsed ? 'Expand the target panel' : 'Collapse the target panel';
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      if (collapsed) syncSummary();
+      try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) {}
+    }
+    btn.addEventListener('click', () => set(!card.classList.contains('is-collapsed')));
+    if (input) input.addEventListener('input', syncSummary);
+    try {
+      const stored = localStorage.getItem(KEY)
+        ?? (legacyKey ? localStorage.getItem(legacyKey) : null);
+      set(stored === '1');
+    } catch (e) { set(false); }
+    // Returned so a tool that fills its input from code can refresh the bar —
+    // assigning .value never fires an 'input' event.
+    return { syncSummary };
+  }
+
   function activateView(view) {
     currentView = view;
     document.querySelectorAll('.menu-item').forEach(b =>
@@ -1597,34 +1683,9 @@ body{height:auto;overflow:auto;padding:28px;}
   const scanStatus = document.getElementById('scan-status');
   const scanResults = document.getElementById('scan-results');
 
-  // ── Collapsible target panel ─────────────────────────────────────────────
-  // Folding the form away hands its height to the results pane. The choice is
-  // remembered, so someone who works collapsed stays collapsed across reloads;
-  // the collapsed bar echoes the target so the state is never ambiguous.
-  const NETSCAN_COLLAPSE_KEY = 'secanalysis-netscan-collapsed';
-  const netscanCollapseBtn = document.getElementById('netscan-collapse');
-  const netscanSummary = document.getElementById('netscan-summary');
   const targetInput = document.getElementById('target');
-
-  function syncNetscanSummary() {
-    netscanSummary.textContent = targetInput.value.trim() || '—';
-  }
-  function setNetscanCollapsed(collapsed) {
-    scanForm.classList.toggle('is-collapsed', collapsed);
-    netscanCollapseBtn.setAttribute('aria-expanded', String(!collapsed));
-    const label = collapsed ? 'Expand the target panel' : 'Collapse the target panel';
-    netscanCollapseBtn.title = label;
-    netscanCollapseBtn.setAttribute('aria-label', label);
-    if (collapsed) syncNetscanSummary();
-    try { localStorage.setItem(NETSCAN_COLLAPSE_KEY, collapsed ? '1' : '0'); } catch (e) {}
-  }
-  netscanCollapseBtn.addEventListener('click', () => {
-    setNetscanCollapsed(!scanForm.classList.contains('is-collapsed'));
-  });
-  targetInput.addEventListener('input', syncNetscanSummary);
-  try {
-    setNetscanCollapsed(localStorage.getItem(NETSCAN_COLLAPSE_KEY) === '1');
-  } catch (e) { setNetscanCollapsed(false); }
+  const netscanPanel = makeCollapsibleCard('netscan', scanForm, targetInput,
+                                           'secanalysis-netscan-collapsed');
 
   // ── Detect my router ─────────────────────────────────────────────────────
   // Fills the target with the gateway the server found by tracing outward (see
@@ -1649,7 +1710,7 @@ body{height:auto;overflow:auto;padding:28px;}
         return;
       }
       document.getElementById('target').value = d.ip;
-      syncNetscanSummary();   // a scripted .value never fires 'input'
+      netscanPanel.syncSummary();   // a scripted .value never fires 'input'
       const name = d.dns && d.dns.hostname;
       // Say where it came from: on bridge networking hop 1 is the Docker host,
       // so "hop 2" is the honest answer to "why that address?".
@@ -2095,7 +2156,23 @@ body{height:auto;overflow:auto;padding:28px;}
     refreshMsg: t => `Re-checking certificate-transparency logs for <code>${esc(t)}</code>…`,
   });
 
-  const savedMods = [subnetSaved, subdomainsSaved];
+  const urlSaved = makeSavedScans({
+    tool: 'url', view: 'url', unit: 'checks',
+    submenuId: 'url-submenu', toggleId: 'url-toggle',
+    resultsId: 'url-results', statusId: 'url-status',
+    targetInputId: 'url',
+    render: (data, ctx) => renderUrl(data, ctx),
+    describe: d => {
+      const sc = d.scorecard || {};
+      const on = Object.entries(d.options || {}).filter(([, v]) => v).map(([k]) => OPTION_LABEL[k]);
+      return `${sc.score == null ? 'No score' : sc.score + '/100'} for ${d.url}`
+        + (on.length ? `, with ${on.join(' and ')}.` : '.')
+        + ` Refreshing re-runs the same checks and reports which ones changed.`;
+    },
+    refreshMsg: t => `Re-analyzing <code>${esc(t)}</code>…`,
+  });
+
+  const savedMods = [subnetSaved, subdomainsSaved, urlSaved];
   function refreshSavedMenus() { savedMods.forEach(m => m.renderMenu()); }
   function closeSavedScans() { savedMods.forEach(m => m.clearOpen()); }
 
@@ -2199,6 +2276,7 @@ body{height:auto;overflow:auto;padding:28px;}
   const urlBtn = document.getElementById('url-btn');
   const urlStatus = document.getElementById('url-status');
   const urlResults = document.getElementById('url-results');
+  const urlPanel = makeCollapsibleCard('url', urlForm, document.getElementById('url'));
 
   function formatUrl(input) {
     return /^https?:\/\//i.test(input) ? input : 'https://' + input;
@@ -2221,12 +2299,13 @@ body{height:auto;overflow:auto;padding:28px;}
           url,
           portScan: urlForm.portScan.checked,
           dnsAuth: urlForm.dnsAuth.checked,
+          whois: urlForm.whois.checked,
           username: urlForm.username.value.trim(),
           password: urlForm.password.value,
         }) });
       const data = await res.json();
       if (!res.ok) { showUrlError(data); return; }
-      renderUrl(data);
+      urlSaved.showLive(data);
     } catch (err) { showUrlError({ error: 'Network error: ' + err.message }); }
     finally { urlBtn.disabled = false; }
   });
@@ -2242,6 +2321,14 @@ body{height:auto;overflow:auto;padding:28px;}
       <span class="kv-val ${found ? 'found' : 'not-found'}">${found ? '✅ ' + esc(value) : '❌ Not found'}</span></div>`;
   }
 
+  // Which optional checks a result was produced with. Saved scans replay them on
+  // refresh, so the report says which ones are in play.
+  const OPTION_LABEL = {
+    portScan: 'the port scan',
+    dnsAuth: 'DNS & email security',
+    whois: 'WHOIS',
+  };
+
   const GRADE_META = {
     good: { icon: '✅', label: 'Good' },
     warn: { icon: '⚠️', label: 'Attention' },
@@ -2250,16 +2337,107 @@ body{height:auto;overflow:auto;padding:28px;}
   };
   const RATING_LABEL = { good: 'Good', warn: 'Needs attention', bad: 'Poor' };
 
-  function renderScorecard(sc) {
+  // Age reads better in years once a domain is old enough for the day count to
+  // stop meaning anything.
+  function humanAge(days) {
+    if (days == null) return null;
+    if (days < 60) return days + ' day' + (days === 1 ? '' : 's');
+    if (days < 730) return Math.round(days / 30) + ' months';
+    return (days / 365.25).toFixed(1) + ' years';
+  }
+
+  function renderWhois(w) {
+    if (!w) return '';
+    let html = `<div class="card result-section"><h3>Domain Registration <span class="port-range">(WHOIS)</span></h3>`;
+    if (!w.found) {
+      html += `<p class="muted">${esc(w.error || 'No registration record found')}`
+        + (w.queried ? ` — queried <span class="mono">${esc(w.queried)}</span>` : '') + `</p></div>`;
+      return html;
+    }
+
+    const exp = w.daysUntilExpiry;
+    if (exp != null && exp < 0)
+      html += `<div class="warning-banner">⚠️ Registration expired ${Math.abs(exp)} day(s) ago — the domain can lapse or be re-registered by someone else</div>`;
+    else if (exp != null && exp <= 30)
+      html += `<div class="warning-banner">⚠️ Registration expires in ${exp} day(s)</div>`;
+    // A domain registered days ago is the single strongest signal that a site is
+    // a throwaway — phishing kits are hosted on names younger than their TLS certs.
+    if (w.ageDays != null && w.ageDays <= 30)
+      html += `<div class="warning-banner">⚠️ Registered only ${w.ageDays} day(s) ago — very new domains are common in phishing and malware campaigns</div>`;
+
+    const row = (label, value) => value
+      ? `<div class="info-item"><strong>${label}</strong><span>${value}</span></div>` : '';
+    html += `<div class="info-grid">`;
+    html += row('Domain', `<span class="mono">${esc(w.queried)}</span>`);
+    html += row('Registrar', w.registrarUrl
+      ? `${esc(w.registrar || '—')} <span class="muted">(${esc(w.registrarUrl)})</span>`
+      : (w.registrar ? esc(w.registrar) : ''));
+    html += row('Registrant', w.registrant ? esc(w.registrant) : (w.redacted ? '<span class="muted">Withheld for privacy</span>' : ''));
+    html += row('Country', w.country ? esc(w.country) : '');
+    html += row('Created', w.created
+      ? `${esc(w.created)}${w.ageDays != null ? ` <span class="muted">(${humanAge(w.ageDays)} old)</span>` : ''}` : '');
+    html += row('Updated', w.updated ? esc(w.updated) : '');
+    html += row('Expires', w.expires
+      ? `<span class="expiry-badge ${exp == null ? '' : expiryClass(exp)}">${esc(w.expires)}${exp == null ? '' : (exp < 0 ? ' — EXPIRED' : ` (${exp}d remaining)`)}</span>` : '');
+    html += row('DNSSEC', w.dnssec
+      ? (w.dnssecSigned ? `<span class="kv-val found">✅ ${esc(w.dnssec)}</span>`
+                        : `<span class="kv-val not-found">${esc(w.dnssec)}</span>`) : '');
+    html += row('Abuse contact', w.abuseEmail ? `<span class="mono small">${esc(w.abuseEmail)}</span>` : '');
+    html += `</div>`;
+
+    if (w.statuses && w.statuses.length) {
+      html += `<div class="sans-block"><strong>Domain status</strong><div class="sans-tags">`;
+      w.statuses.forEach(t => html += `<span class="san-tag">${esc(t)}</span>`);
+      html += `</div></div>`;
+    }
+    if (w.nameServers && w.nameServers.length) {
+      html += `<div class="sans-block"><strong>Name servers (${w.nameServers.length})</strong><div class="sans-tags">`;
+      w.nameServers.forEach(n => html += `<span class="san-tag">${esc(n)}</span>`);
+      html += `</div></div>`;
+    }
+    if (w.redacted)
+      html += `<p class="muted score-note">Contact fields are redacted by the registry (GDPR or a privacy service), so an absent registrant is not an absent owner.</p>`;
+    html += `</div>`;
+
+    if (w.raw)
+      html += `<details class="card raw"><summary>Raw WHOIS record for ${esc(w.queried)}</summary>
+        <pre class="file-content">${esc(w.raw)}</pre></details>`;
+    return html;
+  }
+
+  function renderScorecard(r, ctx) {
+    const sc = r.scorecard;
     if (!sc || sc.score === null) return '';
     const meta = GRADE_META[sc.rating] || GRADE_META.na;
-    let rows = '';
-    for (const c of sc.categories) {
+    const notes = (ctx && ctx.notes) || {};
+    // Set by a refresh: which checks changed grade, and what the score was before.
+    const moved = new Map((r.changes || []).map(c => [c.name, c]));
+    const newKeys = new Set((ctx && ctx.newKeys) || []);
+    // A check that applied last time but not now (the option was turned off, or
+    // the site stopped serving mail) is kept, greyed out, so its note survives.
+    const rows = (sc.categories || []).map(c => ({ c, gone: false }))
+      .concat(((ctx && ctx.goneItems) || []).map(c => ({ c, gone: true })));
+
+    let list = '';
+    for (const { c, gone } of rows) {
       const m = GRADE_META[c.grade] || GRADE_META.na;
-      rows += `<div class="score-row score-${c.grade}">
-        <span class="score-cat">${m.icon} ${esc(c.name)}</span>
-        <span class="score-detail">${esc(c.detail)}</span></div>`;
+      const mv = moved.get(c.name);
+      const badge = gone ? `<span class="host-badge gone">gone</span>`
+        : newKeys.has(c.name) ? `<span class="host-badge new">new</span>`
+        : mv ? `<span class="host-badge ${mv.to === 'good' ? 'new' : 'moved'}">`
+             + `${esc(GRADE_META[mv.from]?.label || mv.from)} → ${esc(GRADE_META[mv.to]?.label || mv.to)}</span>`
+        : '';
+      const note = notes[c.name];
+      // The note button is the row's last item, not part of the label: a long
+      // check name would otherwise push it onto a line of its own.
+      list += `<div class="score-row score-${esc(c.grade)}${gone ? ' is-gone' : ''}">
+        <span class="score-cat">${m.icon} ${esc(c.name)}${badge}</span>
+        <span class="score-detail">${esc(c.detail)}</span>`
+        + (ctx ? `<span class="row-actions">${urlSaved.noteBtn(c.name, !!note)}</span>` : '')
+        + `</div>`;
+      if (note) list += `<div class="score-annotation">${esc(note.note)}</div>`;
     }
+    const rowsHtml = list;
     return `<div class="card result-section scorecard">
       <div class="score-head">
         <div class="score-ring score-${sc.rating}">
@@ -2267,21 +2445,33 @@ body{height:auto;overflow:auto;padding:28px;}
         </div>
         <div class="score-verdict">
           <h3>Security Scorecard</h3>
-          <span class="score-badge score-${sc.rating}">${meta.icon} ${RATING_LABEL[sc.rating]}</span>
-        </div>
+          <span class="score-badge score-${sc.rating}">${meta.icon} ${RATING_LABEL[sc.rating]}</span>`
+        + (r.previousScore != null && r.previousScore !== sc.score
+            ? `<span class="saved-diff">${r.previousScore}/100 at the previous run</span>` : '')
+        + `</div>
       </div>
-      <div class="score-list">${rows}</div>
+      <div class="score-list">${rowsHtml}</div>
       <p class="muted score-note">Weighted across the categories that applied. Categories marked N/A (e.g. DNS checks when DNS authentication is off, or mail records on a no-MX domain) are excluded from the score.</p>
     </div>`;
   }
 
-  function renderUrl(r) {
+  // `ctx` is the saved scan on screen (null for a live run): it carries the
+  // header bar, the per-check notes and the diff against the previous refresh.
+  function renderUrl(r, ctx) {
     lastResults.url = r;
     urlStatus.hidden = true;
-    let html = '';
+    let html = ctx ? urlSaved.bar(ctx) : '';
+    // Reopening a saved scan puts its options back in the form, so re-running by
+    // hand asks the same questions the saved report answered. (The engine does
+    // the same for the target field.)
+    if (ctx) {
+      for (const [k, v] of Object.entries(r.options || {}))
+        if (urlForm[k]) urlForm[k].checked = !!v;
+      urlPanel.syncSummary();   // a scripted .value never fires 'input'
+    }
 
     // Scorecard (weighted verdict over everything that was checked)
-    html += renderScorecard(r.scorecard);
+    html += renderScorecard(r, ctx);
 
     // Basic info
     const rt = r.responseTimeMs;
@@ -2399,6 +2589,9 @@ body{height:auto;overflow:auto;padding:28px;}
         html += `<div class="dns-row"><span class="dns-type">${type}</span><span>${val}</span></div>`;
       html += `</div></div>`;
     }
+
+    // Domain registration (optional: WHOIS)
+    html += renderWhois(r.whois);
 
     // DNS authentication (optional: DMARC + DNSSEC)
     if (r.dmarc || r.dnssec) {
@@ -2560,7 +2753,7 @@ body{height:auto;overflow:auto;padding:28px;}
     }
 
     html += `<div class="timestamp">Analysis performed at ${esc(new Date(r.timestamp).toLocaleString())}</div>`;
-    urlResults.innerHTML = reportBar('url') + html;
+    urlResults.innerHTML = reportBar('url', ctx ? '' : urlSaved.saveBtn()) + html;
   }
 
   // ══════════════════════════════════════════════════════════════════════

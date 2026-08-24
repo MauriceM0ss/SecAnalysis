@@ -29,7 +29,7 @@ things in the top bar.
 |------|--------------|
 | **Network Scan** | `nmap` against one host: open ports, service/version, OS guess, DNS name ⇄ IP |
 | **Subnet Scan** | Sweeps a CIDR range for live hosts (IP, hostname, MAC, vendor) |
-| **URL Analyzer** | Security headers, TLS, DNS, mail auth, mixed content, cookies → a graded scorecard |
+| **URL Analyzer** | Security headers, TLS, DNS, WHOIS, mail auth, mixed content, cookies → a graded scorecard |
 | **Exposure Probe** | Sensitive files and misconfigurations left open on a staging host |
 | **Repo Audit** | Secrets, dependency CVEs, IaC misconfig, licences, SBOM, Dockerfiles, GitHub Actions |
 | **Subdomain Finder** | Passive subdomain discovery from CT logs, with liveness checks |
@@ -60,6 +60,12 @@ things in the top bar.
   detection, full chain verification, which protocol versions the server still
   accepts (TLS 1.0–1.3), and weak-cipher detection.
 - **DNS records** — A, AAAA, PTR, NS, MX, TXT, CAA.
+- **WHOIS registration** (optional) — registrar, registrant (where not redacted),
+  creation/update/expiry dates, domain age, EPP status codes and name servers,
+  plus the raw record. The lookup walks up from the hostname to the registrable
+  domain, so `www.example.co.uk` is answered by `example.co.uk` without a Public
+  Suffix List. A domain registered within the last month, or one about to
+  expire, is flagged — both are common on throwaway phishing hosts.
 - **Mail authentication** (optional) — DMARC (honouring organizational-domain
   inheritance), SPF (with the RFC 7208 10-lookup limit), DKIM, MTA-STS, TLS-RPT,
   and a DNSSEC signing indicator.
@@ -72,6 +78,10 @@ things in the top bar.
 - **Scorecard** — the findings roll into per-category verdicts and a weighted
   0–100 score. Categories that don't apply are excluded rather than penalised.
 - Optional **port scan** of ports 1–1024, and **HTTP Basic auth** credentials.
+- **Save the scan** (see [Saved scans](#saved-scans)) to reopen it later, re-run
+  it with the same options, and see which checks changed grade.
+- **Collapsible input panel** — the chevron folds the form to a one-line bar so a
+  long report gets the whole pane, exactly as Network Scan's does.
 
 ### Exposure Probe
 - **Sensitive paths** — `.git/HEAD`, `.git/config`, `.env`, `.svn/entries`,
@@ -151,12 +161,21 @@ Two different things, and the difference matters:
   The HTML is what you read; the JSON is what a later audit can be diffed
   against — findings not recorded on the day can't be reconstructed afterwards.
   Reports saved before this existed have no JSON and report `hasData: false`.
-- **Saved scans** (Subnet Scan and Subdomain Finder) — stores the tool's own
-  result data, so reopening it re-renders through the normal UI with every
-  button still working. **Refresh** re-runs the tool against the same target and
-  marks what's **new** or **gone** since last time, and you can attach a **note**
-  to any host. Notes are keyed to the scan, so they survive a host dropping out
-  of a refresh and coming back.
+- **Saved scans** (Subnet Scan, Subdomain Finder and URL Analyzer) — stores the
+  tool's own result data, so reopening it re-renders through the normal UI with
+  every button still working. **Refresh** re-runs the tool against the same
+  target and marks what's **new** or **gone** since last time, and you can attach
+  a **note** to any row. Notes are keyed to the scan, so they survive a host
+  dropping out of a refresh and coming back.
+
+  The URL Analyzer's rows are its **scorecard checks**, since one analysis is a
+  report rather than a list of hosts. So a note lands on a check ("we accept the
+  missing CSP because …"), and because that list of checks never changes, a
+  refresh reports what a new/gone diff can't: which checks **changed grade**, and
+  what the score was before. A saved URL scan also remembers which optional
+  checks it was run with (port scan / DNS & email / WHOIS) and replays them on
+  refresh. It does **not** store Basic-auth credentials — a refresh of a
+  password-protected URL re-runs anonymously.
 
 ## Auditing private repos
 
@@ -261,7 +280,8 @@ markup and all the JS; `static/style.css` holds the themes.
 
 **Network Scan** and **Subnet Scan** build an `nmap` argument list and parse its
 XML. **URL Analyzer** probes over HTTP(S)/TLS using the stdlib plus `dnspython`
-and `cryptography`. **Exposure Probe** uses the stdlib only. **Repo Audit**
+and `cryptography`, and shells out to `whois` for the optional registration
+lookup. **Exposure Probe** uses the stdlib only. **Repo Audit**
 shallow-clones into a temp dir (or reads a mounted clone) and runs `gitleaks`,
 `trivy`, `hadolint`, and `zizmor` — all bundled in the image. Trivy downloads
 its vulnerability database on first use, so the first audit per container is

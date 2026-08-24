@@ -118,6 +118,164 @@ def test_analyze_spf():
     assert many["tooManyLookups"] and many["lookups"] == 11
 
 
+# ── WHOIS ──────────────────────────────────────────────────────────────────
+# Every registry answers in its own layout, so the parser is exercised against
+# the four shapes that cover most of them. No lookup here touches the network:
+# subprocess.run is stubbed wherever get_whois is called.
+WHOIS_ICANN = """\
+   Domain Name: EXAMPLE.COM
+   Registrar: MarkMonitor Inc.
+   Registrar URL: http://www.markmonitor.com
+   Updated Date: 2024-08-14T07:01:34Z
+   Creation Date: 1995-08-14T04:00:00Z
+   Registry Expiry Date: 2035-08-13T04:00:00Z
+   Registrar Abuse Contact Email: abuse@markmonitor.com
+   Domain Status: clientTransferProhibited https://icann.org/epp#clientTransferProhibited
+   Domain Status: clientTransferProhibited (https://icann.org/epp#clientTransferProhibited)
+   Name Server: A.IANA-SERVERS.NET
+   Name Server: B.IANA-SERVERS.NET
+   DNSSEC: signedDelegation
+   Registrant Organization: REDACTED FOR PRIVACY
+>>> Last update of whois database: 2025-01-02T10:00:00Z <<<
+"""
+
+WHOIS_NOMINET = """\
+    Domain name:
+        example.co.uk
+
+    Registrar:
+        Nominet UK [Tag = NOMINET]
+
+    Registered on: 01-Aug-1996
+    Expiry date:  01-Aug-2035
+    Last updated:  05-Jul-2024
+
+    Name servers:
+        ns1.example.co.uk      198.51.100.7  2001:db8::1
+        ns2.example.co.uk
+"""
+
+WHOIS_RIPE_STYLE = """\
+domain:        EXAMPLE.RU
+nserver:       ns1.example.ru. 93.158.134.1
+nserver:       ns2.example.ru.
+state:         REGISTERED, DELEGATED, VERIFIED
+org:           Some Org LLC
+registrar:     RU-CENTER-RU
+created:       1997-09-30T10:48:56Z
+paid-till:     2035-10-01T00:00:00Z
+"""
+
+
+def test_parse_whois_icann_format():
+    w = appmod.parse_whois(WHOIS_ICANN)
+    assert w["registrar"] == "MarkMonitor Inc."
+    assert w["abuseEmail"] == "abuse@markmonitor.com"
+    assert w["nameServers"] == ["A.IANA-SERVERS.NET", "B.IANA-SERVERS.NET"]
+    # The registrar's parenthesised echo of a status is the same status.
+    assert w["statuses"] == ["clientTransferProhibited"]
+    assert w["dnssecSigned"]
+    # Redaction is reported as such, not as an owner named "REDACTED FOR PRIVACY".
+    assert w["registrant"] is None and w["redacted"]
+    assert w["ageDays"] > 10000 and w["daysUntilExpiry"] > 0
+
+
+def test_parse_whois_reads_indented_blocks():
+    """`.uk` puts the registrar and the name servers under a bare key, and lists
+    IPv6 glue on the name-server lines — colons that must not end the block."""
+    w = appmod.parse_whois(WHOIS_NOMINET)
+    assert w["registrar"] == "Nominet UK [Tag = NOMINET]"
+    assert w["nameServers"] == ["ns1.example.co.uk", "ns2.example.co.uk"]
+    assert w["created"] == "01-Aug-1996" and w["ageDays"] > 10000
+
+
+def test_parse_whois_ripe_style_keys():
+    w = appmod.parse_whois(WHOIS_RIPE_STYLE)
+    assert w["registrar"] == "RU-CENTER-RU" and w["registrant"] == "Some Org LLC"
+    # Glue addresses trail the name on the same line; they aren't name servers.
+    assert w["nameServers"] == ["ns1.example.ru", "ns2.example.ru"]
+    assert w["daysUntilExpiry"] > 0
+
+
+def test_whois_date_formats():
+    d = appmod._whois_date
+    assert d("2024-08-14T07:01:34Z").year == 2024
+    assert d("2024-08-14 07:01:34.123 +0000").hour == 7
+    assert d("01-Aug-1996").month == 8      # not a "-19:96" UTC offset
+    assert d("01.08.1996").day == 1         # not fractional seconds
+    assert d("before Aug-1996") is None
+    assert d("") is None
+
+
+@pytest.fixture
+def spy_whois(monkeypatch):
+    """Stub `whois` with a per-domain answer table. Returns the domains asked."""
+    asked = []
+
+    def install(answers):
+        class _Proc:
+            def __init__(self, out):
+                self.stdout, self.stderr, self.returncode = out, "", 0
+
+        def fake_run(argv, **kwargs):
+            domain = argv[-1]
+            asked.append(domain)
+            return _Proc(answers.get(domain, "No match for \"%s\"." % domain.upper()))
+
+        monkeypatch.setattr(appmod.subprocess, "run", fake_run)
+        return asked
+    return install
+
+
+def test_get_whois_walks_up_to_the_registrable_domain(spy_whois):
+    asked = spy_whois({"example.com": WHOIS_ICANN})
+    w = appmod.get_whois("www.example.com")
+    assert w["found"] and w["queried"] == "example.com"
+    assert asked == ["www.example.com", "example.com"]
+    assert w["raw"].startswith("   Domain Name: EXAMPLE.COM")
+
+
+def test_get_whois_handles_multi_label_suffixes(spy_whois):
+    asked = spy_whois({"example.co.uk": WHOIS_NOMINET})
+    w = appmod.get_whois("www.example.co.uk")
+    assert w["found"] and w["queried"] == "example.co.uk"
+    # Stops at the record; never falls through to the public suffix itself.
+    assert "co.uk" not in asked
+
+
+def test_get_whois_reports_no_record(spy_whois):
+    spy_whois({})
+    w = appmod.get_whois("nothing.example.com")
+    assert not w["found"] and w["error"]
+
+
+def test_get_whois_rejects_ip_targets(spy_whois):
+    asked = spy_whois({})
+    w = appmod.get_whois("8.8.8.8")
+    assert not w["found"] and "IP address" in w["error"]
+    assert asked == []
+
+
+def test_analyze_skips_whois_unless_asked(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(appmod, "get_whois", lambda h: calls.append(h) or {"found": False})
+    monkeypatch.setattr(appmod.socket, "gethostbyname", lambda h: "192.0.2.1")
+    monkeypatch.setattr(appmod, "head_request", lambda u, a: (200, {}))
+    monkeypatch.setattr(appmod, "get_dns_records", lambda h: {})
+    monkeypatch.setattr(appmod, "get_cookies", lambda *a, **k: [])
+    monkeypatch.setattr(appmod, "get_redirect_chain", lambda *a, **k: [])
+    monkeypatch.setattr(appmod, "fetch_text_file", lambda *a, **k: {"found": False})
+    monkeypatch.setattr(appmod, "fetch_page_html", lambda *a, **k: "")
+    monkeypatch.setattr(appmod, "get_https_redirect", lambda h: {"tested": False})
+
+    r = client.post("/api/analyze", json={"url": "http://x.test/"})
+    assert r.status_code == 200 and r.get_json()["whois"] is None and calls == []
+
+    r = client.post("/api/analyze", json={"url": "http://x.test/", "whois": True})
+    assert r.status_code == 200 and r.get_json()["whois"] == {"found": False}
+    assert calls == ["x.test"]
+
+
 def test_analyze_csp():
     weak = appmod.analyze_csp("default-src 'self'; script-src 'self' 'unsafe-inline' *")
     assert weak["grade"] == "bad"
@@ -235,6 +393,92 @@ def test_grade_analysis_weights_and_excludes_na():
     cats = {c["name"]: c["grade"] for c in sc["categories"]}
     assert cats["TLS/SSL"] == "na" and cats["DMARC"] == "na"      # excluded from score
     assert cats["Security Headers"] == "bad" and sc["rating"] == "bad"
+
+
+# ── URL Analyzer as a saved scan ───────────────────────────────────────────
+def _url_payload(score=70, grades=None, **opts):
+    """A minimal /api/analyze-shaped payload."""
+    grades = grades or {"TLS/SSL": "good", "Cookies": "warn"}
+    return {
+        "url": "https://example.test/", "ipAddress": "192.0.2.1", "statusCode": 200,
+        "options": {"portScan": False, "dnsAuth": False, "whois": False, **opts},
+        "scorecard": {"score": score, "rating": "warn",
+                      "categories": [{"name": n, "grade": g, "detail": ""}
+                                     for n, g in grades.items()]},
+    }
+
+
+def test_validate_url_target():
+    assert appmod._validate_url_target("https://example.test/a") == ("https://example.test/a", None)
+    assert appmod._validate_url_target("example.test")[1]        # no scheme
+    assert appmod._validate_url_target("ftp://example.test")[1]  # wrong scheme
+    assert appmod._validate_url_target("")[1]
+
+
+def test_clean_url_result_keeps_options_and_drops_extras():
+    data = _url_payload(whois=True)
+    data["password"] = "hunter2"          # nothing outside the allowlist survives
+    data["certInfo"] = {"subject": "CN=example.test"}
+    clean = appmod._clean_url_result(data, "https://example.test/")
+    assert "password" not in clean
+    assert clean["certInfo"] == {"subject": "CN=example.test"}
+    # Options ride along so a refresh re-runs the same checks.
+    assert clean["options"] == {"portScan": False, "dnsAuth": False, "whois": True}
+    assert [c["name"] for c in clean["scorecard"]["categories"]] == ["TLS/SSL", "Cookies"]
+
+
+def test_url_grade_changes_reports_moves_only():
+    prev = appmod._clean_url_result(_url_payload(70), "https://example.test/")
+    now = appmod._clean_url_result(
+        _url_payload(55, {"TLS/SSL": "good", "Cookies": "bad"}), "https://example.test/", prev)
+    # An unchanged check is not a change; the scorecard's fixed category list is
+    # why the generic new/gone diff can't carry this tool.
+    assert now["changes"] == [{"name": "Cookies", "from": "warn", "to": "bad"}]
+    assert now["previousScore"] == 70
+    assert appmod._clean_url_result(_url_payload(), "https://example.test/")["changes"] == []
+
+
+def test_saved_url_scan_refreshes_with_the_options_it_was_saved_with(client, monkeypatch):
+    seen = []
+
+    def fake_run(url, opts, auth=None):
+        seen.append((url, dict(opts), auth))
+        return _url_payload(60, whois=True), None, 200
+
+    monkeypatch.setattr(appmod, "run_url_analysis", fake_run)
+
+    created = client.post("/api/saved-scans", json={
+        "tool": "url", "name": "Example", "data": _url_payload(70, whois=True)}).get_json()
+    assert created["itemCount"] == 2      # the scorecard's checks are the items
+
+    r = client.post("/api/saved-scans/%d/refresh" % created["id"])
+    assert r.status_code == 200
+    # Re-run with the saved options, and without any credentials: those are
+    # deliberately never stored.
+    assert seen == [("https://example.test/", {"portScan": False, "dnsAuth": False,
+                                               "whois": True}, None)]
+    assert r.get_json()["data"]["previousScore"] == 70
+
+
+def test_note_on_a_scorecard_check_survives_a_slash(client, monkeypatch):
+    monkeypatch.setattr(appmod, "run_url_analysis",
+                        lambda url, opts, auth=None: (_url_payload(60), None, 200))
+    sid = client.post("/api/saved-scans", json={
+        "tool": "url", "name": "Example", "data": _url_payload()}).get_json()["id"]
+
+    # "TLS/SSL" is a legitimate item key, which is why the notes route takes a path.
+    r = client.put("/api/saved-scans/%d/notes/TLS/SSL" % sid, json={"note": "accepted"})
+    assert r.status_code == 200 and r.get_json()["host"] == "TLS/SSL"
+    assert client.get("/api/saved-scans/%d" % sid).get_json()["notes"]["TLS/SSL"]["note"] == "accepted"
+    # The note outlives a refresh, which is the point of saving a scan.
+    client.post("/api/saved-scans/%d/refresh" % sid)
+    assert client.get("/api/saved-scans/%d" % sid).get_json()["notes"]["TLS/SSL"]["note"] == "accepted"
+
+
+def test_saved_url_scan_rejects_junk(client):
+    for data in ({}, {"url": "https://example.test/"}, {"scorecard": {}}):
+        r = client.post("/api/saved-scans", json={"tool": "url", "name": "x", "data": data})
+        assert r.status_code == 400
 
 
 def test_resolve_history_file_guards_traversal():
