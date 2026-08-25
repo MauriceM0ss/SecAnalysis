@@ -211,6 +211,14 @@ select { -webkit-appearance: none; appearance: none; }
   --pane-rule: transparent;
 }
 
+/* Type scale for the whole app. Every font-size below is in rem and nothing
+   else is — spacing, radii and widths are all px — so this one number is the
+   size of the text and only the text. 15px against the browser's default of
+   16px makes everything about 6% smaller without moving any layout. */
+html {
+  font-size: 15px;
+}
+
 body {
   font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
@@ -220,7 +228,7 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.55;
 }
 ::selection { background: var(--sel-bg); color: var(--sel-fg); }
