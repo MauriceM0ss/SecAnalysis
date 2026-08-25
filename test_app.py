@@ -118,6 +118,179 @@ def test_analyze_spf():
     assert many["tooManyLookups"] and many["lookups"] == 11
 
 
+# ── Network Scan: MAC/vendor, summarised ports, UDP, saved scans ───────────
+NMAP_XML = """<?xml version="1.0"?><nmaprun>
+<host><status state="up" reason="arp-response"/>
+<address addr="192.168.2.134" addrtype="ipv4"/>
+<address addr="48:A2:E6:BF:4A:D4" addrtype="mac" vendor="Resideo"/>
+<hostnames><hostname name="gatewaybf4ad4.home" type="PTR"/></hostnames>
+<ports>
+<extraports state="closed" count="998"><extrareasons reason="resets" count="998"/></extraports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/>
+  <service name="ssh" product="OpenSSH" version="9.6"/></port>
+<port protocol="tcp" portid="80"><state state="filtered" reason="no-response"/>
+  <service name="http"/></port>
+</ports>
+<os><osmatch name="Linux 5.x" accuracy="94"/></os>
+</host></nmaprun>"""
+
+NMAP_XML_HOST_DOWN = """<?xml version="1.0"?><nmaprun>
+<runstats><hosts up="0" down="1" total="1"/></runstats></nmaprun>"""
+
+
+def test_parse_nmap_xml_reads_mac_and_vendor():
+    r = appmod.parse_nmap_xml(NMAP_XML)
+    assert r["mac"] == "48:A2:E6:BF:4A:D4" and r["vendor"] == "Resideo"
+    # A factory OUI, so no "self-assigned" caveat and nothing to explain away.
+    assert r["macSelfAssigned"] is False and r["macHint"] == ""
+    assert r["hostnames"][0]["name"] == "gatewaybf4ad4.home"
+    assert r["os"][0]["accuracy"] == 94
+
+
+def test_parse_nmap_xml_keeps_the_ports_nmap_summarised():
+    r = appmod.parse_nmap_xml(NMAP_XML)
+    # "998 closed (resets)" is the difference between "reachable but listening on
+    # nothing" and "something is dropping our probes" — it can't be dropped.
+    assert r["extraPorts"] == [{"state": "closed", "protocol": "tcp", "count": 998,
+                                "reasons": [{"reason": "resets", "count": 998}]}]
+    assert [(p["port"], p["state"], p["reason"]) for p in r["ports"]] == [
+        (22, "open", "syn-ack"), (80, "filtered", "no-response")]
+
+
+def test_parse_nmap_xml_labels_extraports_with_the_scan_that_found_them():
+    # The XML never says which protocol an <extraports> belongs to; the caller does.
+    assert appmod.parse_nmap_xml(NMAP_XML, protocol="udp")["extraPorts"][0]["protocol"] == "udp"
+
+
+def test_parse_nmap_xml_survives_a_host_that_was_never_scanned():
+    r = appmod.parse_nmap_xml(NMAP_XML_HOST_DOWN)
+    # nmap emits no <host> when it decides the address is down. That's "no ports
+    # were scanned", which the UI must not report as "no open ports found".
+    assert r["state"] is None and r["ports"] == [] and r["extraPorts"] == []
+
+
+def test_mac_self_assigned():
+    assert appmod._mac_self_assigned("02:CA:DE:4C:01:BF")     # locally administered
+    assert appmod._mac_self_assigned("ba:f8:72:fb:e0:fd")     # a phone's private address
+    assert not appmod._mac_self_assigned("48:A2:E6:BF:4A:D4")  # a real OUI
+    assert not appmod._mac_self_assigned("")
+    assert not appmod._mac_self_assigned(None)
+
+
+def test_mac_hint_only_fires_where_a_mac_was_plausible():
+    # A LAN host with no MAC means the scanner isn't on that segment — worth saying.
+    assert "network segment" in appmod._mac_hint("192.168.2.134", None)
+    # A public host was never going to have one, and a host that has one needs no note.
+    assert appmod._mac_hint("93.184.216.34", None) == ""
+    assert appmod._mac_hint("192.168.2.134", "48:A2:E6:BF:4A:D4") == ""
+
+
+def test_build_udp_args_stays_lean():
+    args = appmod.build_udp_args("host.test", {"sV": True, "skip_ping": True})
+    assert "-sU" in args and "-Pn" in args and args[-1] == "host.test"
+    # Version detection is inherited by the TCP pass only: probing UDP ports that
+    # never answer costs minutes and tells you nothing a port number doesn't.
+    assert "-sV" not in args
+    assert appmod.UDP_SCAN_PORTS in args
+
+
+def test_udp_pass_summarises_the_ports_that_said_nothing(monkeypatch):
+    udp_xml = """<?xml version="1.0"?><nmaprun><host><status state="up"/>
+    <address addr="10.0.0.5" addrtype="ipv4"/><ports>
+    <port protocol="udp" portid="161"><state state="open" reason="udp-response"/>
+      <service name="snmp"/></port>
+    <port protocol="udp" portid="53"><state state="open|filtered" reason="no-response"/></port>
+    <port protocol="udp" portid="123"><state state="open|filtered" reason="no-response"/></port>
+    <port protocol="udp" portid="69"><state state="closed" reason="port-unreach"/></port>
+    </ports></host></nmaprun>"""
+
+    class _Proc:
+        stdout, stderr, returncode = udp_xml, "", 0
+
+    monkeypatch.setattr(appmod.subprocess, "run", lambda *a, **k: _Proc())
+    result = {"ports": [], "extraPorts": [], "mac": None}
+    command, err = appmod._udp_pass("10.0.0.5", {}, result)
+
+    assert "-sU" in command and not err
+    # Only the port that actually answered is listed; the silent ones are counted.
+    assert [p["port"] for p in result["ports"]] == [161]
+    assert {(e["state"], e["count"]) for e in result["extraPorts"]} == {
+        ("open|filtered", 2), ("closed", 1)}
+
+
+def test_udp_pass_failure_leaves_the_tcp_results_alone(monkeypatch):
+    def boom(*a, **k):
+        raise appmod.subprocess.TimeoutExpired("nmap", 300)
+
+    monkeypatch.setattr(appmod.subprocess, "run", boom)
+    result = {"ports": [{"port": 22}], "extraPorts": [], "mac": None}
+    command, err = appmod._udp_pass("10.0.0.5", {}, result)
+    assert "timed out" in err and result["ports"] == [{"port": 22}]
+
+
+def _netscan_payload(ports=((22, "tcp"), (80, "tcp")), **opts):
+    return {
+        "dns": {"input": "192.168.2.134", "ip": "192.168.2.134",
+                "hostname": "gatewaybf4ad4.home", "aliases": []},
+        "options": {"ports": "fast", **opts},
+        "command": "nmap …", "udpCommand": None, "stderr": "",
+        "result": {"state": "up", "mac": "48:A2:E6:BF:4A:D4", "vendor": "Resideo",
+                   "macSelfAssigned": False, "macHint": "", "hostnames": [], "os": [],
+                   "extraPorts": [{"state": "closed", "protocol": "tcp", "count": 998,
+                                   "reasons": [{"reason": "resets", "count": 998}]}],
+                   "ports": [{"port": p, "protocol": proto, "state": "open",
+                              "reason": "syn-ack", "service": "x", "detail": ""}
+                             for p, proto in ports]},
+    }
+
+
+def test_clean_netscan_result_keeps_identity_and_options():
+    clean = appmod._clean_netscan_result(_netscan_payload(udp=True, sV=True),
+                                         "192.168.2.134")
+    assert clean["result"]["vendor"] == "Resideo"
+    assert clean["result"]["extraPorts"][0]["count"] == 998
+    assert clean["options"]["udp"] is True and clean["options"]["ports"] == "fast"
+    assert appmod.SAVED_SCAN_TOOLS["netscan"]["key"](clean["result"]["ports"][0]) == "22/tcp"
+
+
+def test_saved_netscan_scan_diffs_ports_across_a_refresh(client, monkeypatch):
+    seen = []
+
+    def fake_run(target, opts):
+        seen.append((target, dict(opts)))
+        # 80 went away and 443 appeared since the scan was saved.
+        return _netscan_payload(ports=((22, "tcp"), (443, "tcp")), udp=True), None, 200
+
+    monkeypatch.setattr(appmod, "run_netscan", fake_run)
+    created = client.post("/api/saved-scans", json={
+        "tool": "netscan", "name": "Gateway", "data": _netscan_payload(udp=True)}).get_json()
+    assert created["itemCount"] == 2 and created["target"] == "192.168.2.134"
+
+    r = client.post("/api/saved-scans/%d/refresh" % created["id"]).get_json()
+    assert r["newKeys"] == ["443/tcp"]
+    assert [i["port"] for i in r["goneItems"]] == [80]
+    # The refresh re-ran with the options the scan was saved with. They're stored
+    # normalised, so every flag is explicit rather than merely absent.
+    assert seen == [("192.168.2.134", {"ports": "fast", "udp": True, "sV": False,
+                                       "os": False, "scripts": False, "skip_ping": False})]
+
+
+def test_note_on_a_port_survives_a_refresh(client, monkeypatch):
+    monkeypatch.setattr(appmod, "run_netscan",
+                        lambda t, o: (_netscan_payload(), None, 200))
+    sid = client.post("/api/saved-scans", json={
+        "tool": "netscan", "name": "Gateway", "data": _netscan_payload()}).get_json()["id"]
+
+    # A port key has a slash in it, like the URL analyzer's checks.
+    assert client.put("/api/saved-scans/%d/notes/22/tcp" % sid,
+                      json={"note": "ssh, deliberate"}).status_code == 200
+    assert client.put("/api/saved-scans/%d/notes/9999/tcp" % sid,
+                      json={"note": "nope"}).status_code == 400
+    client.post("/api/saved-scans/%d/refresh" % sid)
+    notes = client.get("/api/saved-scans/%d" % sid).get_json()["notes"]
+    assert notes["22/tcp"]["note"] == "ssh, deliberate"
+
+
 # ── WHOIS ──────────────────────────────────────────────────────────────────
 # Every registry answers in its own layout, so the parser is exercised against
 # the four shapes that cover most of them. No lookup here touches the network:

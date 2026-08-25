@@ -95,6 +95,14 @@ def resolve(target: str) -> dict:
     return info
 
 
+# The UDP ports worth asking about when you're trying to identify a device rather
+# than audit a server: discovery and management protocols that only speak UDP, so
+# a TCP-only scan is blind to them. Deliberately short — UDP scanning is slow,
+# because a closed port answers with an ICMP unreachable that hosts rate-limit.
+UDP_SCAN_PORTS = ("53,67,68,69,123,137,138,161,162,500,514,520,623,"
+                  "1900,4500,5353,5683,47808,49152")
+
+
 def build_nmap_args(target: str, opts: dict) -> list:
     args = ["nmap", "-oX", "-", "--reason", "-T4"]
     args += PORT_PRESETS.get(opts.get("ports", "standard"), [])
@@ -110,9 +118,64 @@ def build_nmap_args(target: str, opts: dict) -> list:
     return args
 
 
-def parse_nmap_xml(xml_text: str) -> dict:
-    """Pull the interesting bits out of nmap's XML into plain dicts."""
-    out = {"state": None, "ports": [], "os": [], "hostnames": []}
+def build_udp_args(target: str, opts: dict) -> list:
+    """The UDP pass. Its own nmap run rather than `-p T:…,U:…` bolted onto the
+    TCP one: the port presets are flags (-F, -p-) that don't compose with a mixed
+    port spec, and keeping the runs separate means a slow UDP scan can time out
+    on its own without taking the TCP results with it."""
+    args = ["nmap", "-oX", "-", "--reason", "-T4", "-sU", "-p", UDP_SCAN_PORTS]
+    if opts.get("skip_ping"):
+        args.append("-Pn")
+    # Deliberately no -sV, even when the TCP pass uses it: version-probing a UDP
+    # port that never answers is where nmap's runtime explodes — minutes for this
+    # short list — and the payoff is small, because on a discovery port set the
+    # port number already tells you what the service would be.
+    args.append(target)
+    return args
+
+
+def _mac_self_assigned(mac: str) -> bool:
+    """True for a locally-administered MAC — one the device chose rather than one
+    burned in at the factory.
+
+    Bit 1 of the first octet says which it is. Phones and laptops rotate a private
+    address per network, and virtual interfaces (docker0, VMs) make theirs up, so
+    an OUI lookup on one of these tells you nothing about who built the device."""
+    try:
+        return bool(int(mac.split(":")[0], 16) & 0x02)
+    except (AttributeError, IndexError, ValueError):
+        return False
+
+
+def _mac_hint(ip, mac) -> str:
+    """Why a host has no MAC address, when that's worth explaining.
+
+    nmap can only read a hardware address for a host on the same network segment
+    as the scanner. On Docker's default bridge network the container reaches the
+    LAN through the host's routing, one hop removed, so every LAN host comes back
+    without one — which looks like a failed lookup rather than the design it is."""
+    if mac or not ip:
+        return ""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ""
+    if not (addr.is_private or addr.is_link_local):
+        return ""
+    return ("nmap only sees a hardware address on its own network segment. If this is a "
+            "host on your LAN, this container isn't on it — see network_mode: host in "
+            "docker-compose.yml.")
+
+
+def parse_nmap_xml(xml_text: str, protocol: str = "tcp") -> dict:
+    """Pull the interesting bits out of nmap's XML into plain dicts.
+
+    `protocol` labels the ports nmap summarised into <extraports>, which carries a
+    count and a state but never says which scan produced it — so the caller, which
+    knows what it ran, supplies that."""
+    out = {"state": None, "ports": [], "os": [], "hostnames": [],
+           "mac": None, "vendor": None, "macSelfAssigned": False,
+           "macHint": "", "extraPorts": []}
     root = ET.fromstring(xml_text)
     host = root.find("host")
     if host is None:
@@ -122,8 +185,31 @@ def parse_nmap_xml(xml_text: str) -> dict:
     if status is not None:
         out["state"] = status.get("state")
 
+    ip = None
+    for addr in host.findall("address"):
+        kind = addr.get("addrtype")
+        if kind in ("ipv4", "ipv6"):
+            ip = addr.get("addr")
+        elif kind == "mac":
+            out["mac"] = addr.get("addr")
+            out["vendor"] = addr.get("vendor") or None
+            out["macSelfAssigned"] = _mac_self_assigned(out["mac"])
+    out["macHint"] = _mac_hint(ip, out["mac"])
+
     for hn in host.findall("./hostnames/hostname"):
         out["hostnames"].append({"name": hn.get("name"), "type": hn.get("type")})
+
+    # The ports nmap didn't list one by one. "998 closed (resets)" and "998
+    # filtered (no-response)" both read as "nothing found" in a table that only
+    # shows open ports, but they mean opposite things about the host.
+    for extra in host.findall("./ports/extraports"):
+        out["extraPorts"].append({
+            "state": extra.get("state"),
+            "protocol": protocol,
+            "count": int(extra.get("count") or 0),
+            "reasons": [{"reason": r.get("reason"), "count": int(r.get("count") or 0)}
+                        for r in extra.findall("extrareasons")],
+        })
 
     for port in host.findall("./ports/port"):
         state = port.find("state")
@@ -2321,23 +2407,61 @@ def index():
     return render_template("index.html", version=APP_VERSION)
 
 
-@app.route("/api/scan", methods=["POST"])
-def scan():
-    data = request.get_json(silent=True) or {}
-    target = (data.get("target") or "").strip()
+NETSCAN_OPTIONS = ("sV", "os", "scripts", "skip_ping", "udp")
 
+
+def _udp_pass(target: str, opts: dict, result: dict):
+    """Run the UDP scan and fold it into an existing TCP result.
+
+    Returns (command, extra_stderr). A UDP failure is reported as a note beside
+    the TCP findings rather than as an error: the TCP half of the scan is still
+    a perfectly good answer, and losing it to a slow UDP pass would be worse."""
+    args = build_udp_args(target, opts)
+    command = " ".join(args)
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return command, ("UDP scan timed out after %ss — TCP results below are unaffected."
+                         % SCAN_TIMEOUT)
+    if not proc.stdout.strip():
+        return command, (proc.stderr.strip() or "UDP scan returned no output.")
+    try:
+        udp = parse_nmap_xml(proc.stdout, protocol="udp")
+    except ET.ParseError:
+        return command, "Could not parse the UDP scan's output."
+
+    # nmap lists every port named in -p, so a silent host yields nineteen rows of
+    # "open|filtered / no-response" that would bury the TCP findings. Keep the
+    # ports that actually answered and summarise the rest, which is what nmap
+    # itself does with an unremarkable range.
+    result["ports"] += [p for p in udp["ports"] if p["state"] == "open"]
+    result["extraPorts"] += udp["extraPorts"]
+    quiet = {}
+    for port in udp["ports"]:
+        if port["state"] != "open":
+            quiet[(port["state"], port["reason"])] = quiet.get((port["state"], port["reason"]), 0) + 1
+    for (state, reason), count in sorted(quiet.items()):
+        result["extraPorts"].append({"state": state, "protocol": "udp", "count": count,
+                                     "reasons": [{"reason": reason, "count": count}]})
+    # Either pass can be the one that sees the hardware address.
+    if not result["mac"] and udp["mac"]:
+        for key in ("mac", "vendor", "macSelfAssigned", "macHint"):
+            result[key] = udp[key]
+    return command, proc.stderr.strip()
+
+
+def run_netscan(target: str, opts: dict):
+    """Scan one host. Returns (payload, error_payload, status) — exactly one of
+    payload / error_payload is set. Shared by the live endpoint and by refreshing
+    a saved scan, so both produce the same shape."""
+    target = (target or "").strip()
     if not is_valid_target(target):
-        return jsonify({"error": "Enter a valid IP address or hostname."}), 400
+        return None, {"error": "Enter a valid IP address or hostname."}, 400
     if not shutil.which("nmap"):
-        return jsonify({"error": "nmap is not installed in this container."}), 500
+        return None, {"error": "nmap is not installed in this container."}, 500
 
-    opts = {
-        "ports":     data.get("ports", "standard"),
-        "sV":        bool(data.get("sV")),
-        "os":        bool(data.get("os")),
-        "scripts":   bool(data.get("scripts")),
-        "skip_ping": bool(data.get("skip_ping")),
-    }
+    opts = {"ports": opts.get("ports", "standard"),
+            **{k: bool(opts.get(k)) for k in NETSCAN_OPTIONS}}
 
     dns_info = resolve(target)
     args = build_nmap_args(target, opts)
@@ -2345,21 +2469,37 @@ def scan():
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return jsonify({"error": f"Scan timed out after {SCAN_TIMEOUT}s. Try a smaller port range.",
-                        "command": " ".join(args)}), 504
+        return None, {"error": f"Scan timed out after {SCAN_TIMEOUT}s. Try a smaller port range.",
+                      "command": " ".join(args)}, 504
 
     if not proc.stdout.strip():
-        return jsonify({"error": (proc.stderr.strip() or "nmap returned no output."),
-                        "command": " ".join(args)}), 500
+        return None, {"error": (proc.stderr.strip() or "nmap returned no output."),
+                      "command": " ".join(args)}, 500
 
     try:
         result = parse_nmap_xml(proc.stdout)
     except ET.ParseError:
-        return jsonify({"error": "Could not parse nmap output.",
-                        "command": " ".join(args), "raw": proc.stdout[:4000]}), 500
+        return None, {"error": "Could not parse nmap output.",
+                      "command": " ".join(args), "raw": proc.stdout[:4000]}, 500
 
-    return jsonify({"dns": dns_info, "result": result,
-                    "command": " ".join(args), "stderr": proc.stderr.strip()})
+    stderr, udp_command = proc.stderr.strip(), None
+    if opts["udp"]:
+        udp_command, udp_stderr = _udp_pass(target, opts, result)
+        stderr = "\n".join(t for t in (stderr, udp_stderr) if t)
+
+    return {"dns": dns_info, "result": result, "options": opts,
+            "command": " ".join(args), "udpCommand": udp_command,
+            "stderr": stderr}, None, 200
+
+
+@app.route("/api/scan", methods=["POST"])
+def scan():
+    data = request.get_json(silent=True) or {}
+    payload, err, status = run_netscan(
+        (data.get("target") or "").strip(),
+        {"ports": data.get("ports", "standard"),
+         **{k: bool(data.get(k)) for k in NETSCAN_OPTIONS}})
+    return jsonify(err or payload), status
 
 
 @app.route("/api/router")
@@ -3270,6 +3410,58 @@ def _clean_subdomain_result(data, target, prev=None):
             "sources": [str(s) for s in (data.get("sources") or [])]}
 
 
+def _validate_host_target(raw):
+    target = (raw or "").strip()
+    if not is_valid_target(target):
+        return None, "Enter a valid IP address or hostname."
+    return target, None
+
+
+def _clean_netscan_result(data, target, prev=None):
+    """A host scan reduced to what gets stored.
+
+    Items are the ports, so a refresh says "22/tcp is new" and a note can hang off
+    one port. The options ride along for the same reason the URL analyzer's do: a
+    refresh that silently dropped the UDP pass or the version detection would be
+    comparing two different scans."""
+    r = data.get("result") if isinstance(data.get("result"), dict) else {}
+    dns = data.get("dns") if isinstance(data.get("dns"), dict) else {}
+    ports = []
+    for p_ in (r.get("ports") or []):
+        if not isinstance(p_, dict) or not str(p_.get("port") or "").isdigit():
+            continue
+        ports.append({"port": int(p_["port"]), "protocol": str(p_.get("protocol") or "tcp"),
+                      "state": str(p_.get("state") or "unknown"),
+                      "reason": str(p_.get("reason") or ""),
+                      "service": str(p_.get("service") or ""),
+                      "detail": str(p_.get("detail") or "")})
+    extra = [{"state": str(e.get("state") or ""), "protocol": str(e.get("protocol") or "tcp"),
+              "count": int(e.get("count") or 0),
+              "reasons": [{"reason": str(x.get("reason") or ""), "count": int(x.get("count") or 0)}
+                          for x in (e.get("reasons") or []) if isinstance(x, dict)]}
+             for e in (r.get("extraPorts") or []) if isinstance(e, dict)]
+    opts = data.get("options") if isinstance(data.get("options"), dict) else {}
+    return {
+        "dns": {"input": target, "ip": dns.get("ip"), "hostname": dns.get("hostname"),
+                "aliases": [str(a) for a in (dns.get("aliases") or [])]},
+        "result": {
+            "state": r.get("state"), "ports": ports, "extraPorts": extra,
+            "mac": r.get("mac"), "vendor": r.get("vendor"),
+            "macSelfAssigned": bool(r.get("macSelfAssigned")),
+            "macHint": str(r.get("macHint") or ""),
+            "hostnames": [{"name": str(h.get("name")), "type": str(h.get("type") or "")}
+                          for h in (r.get("hostnames") or []) if isinstance(h, dict) and h.get("name")],
+            "os": [{"name": str(o.get("name")), "accuracy": int(o.get("accuracy") or 0)}
+                   for o in (r.get("os") or []) if isinstance(o, dict) and o.get("name")],
+        },
+        "options": {"ports": str(opts.get("ports") or "standard"),
+                    **{k: bool(opts.get(k)) for k in NETSCAN_OPTIONS}},
+        "command": str(data.get("command") or ""),
+        "udpCommand": str(data.get("udpCommand") or "") or None,
+        "stderr": str(data.get("stderr") or ""),
+    }
+
+
 def _validate_url_target(raw):
     url = (raw or "").strip()[:500]
     parsed = urlparse(url)
@@ -3334,6 +3526,18 @@ def _clean_url_result(data, target, prev=None):
 
 
 SAVED_SCAN_TOOLS = {
+    "netscan": {
+        # Like the URL analyzer, the result is one report rather than a list —
+        # but a host scan has an obvious list inside it, so the ports are the
+        # items and "22/tcp is new since last week" falls out of the generic diff.
+        "items_key": "result",
+        "target_of": lambda d: ((d.get("dns") or {}).get("input") or "").strip(),
+        "validate": _validate_host_target,
+        "clean": _clean_netscan_result,
+        "sweep": lambda target, prev: run_netscan(target, (prev or {}).get("options") or {}),
+        "items": lambda d: ((d.get("result") or {}).get("ports") or []),
+        "key": lambda i: "%s/%s" % (i.get("port"), i.get("protocol")),
+    },
     "subnet": {
         "items_key": "hosts",
         "target_of": lambda d: (d.get("subnet") or "").strip(),

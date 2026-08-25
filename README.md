@@ -40,8 +40,24 @@ things in the top bar.
 - **Port scan** — Fast (~100 ports), Standard (top 1000), or Full (all 65,535).
 - **Service & version detection** (`-sV`), **OS detection** (`-O`), **default
   scripts** (`-sC`), and **skip host discovery** (`-Pn`) for hosts that don't ping.
+- **MAC address & vendor** — the OUI names the manufacturer, which is usually the
+  fastest way to identify an unknown device. Self-assigned (locally administered)
+  addresses are labelled as such, because phones rotate a private one per network
+  and an OUI lookup on those means nothing. Only readable on the scanner's own
+  network segment; when it isn't, the result says so instead of leaving a blank.
+- **UDP scan** (optional) — 19 discovery ports (SSDP, mDNS, SNMP, DHCP, NTP,
+  NetBIOS, CoAP, BACnet, IPMI…). Devices that expose nothing over TCP often
+  answer here. Runs as its own pass, so a slow UDP scan can't cost you the TCP
+  results.
+- **Says what it found, not just what was open** — "998 closed (resets)" and
+  "998 filtered (no-response)" mean opposite things: the first is a reachable
+  host listening on nothing, the second is a firewall dropping probes. Both used
+  to read as "no open ports". A host nmap never scanned at all is reported as
+  that, rather than as an empty result.
 - **Detect my router** — fills in the address of the router you're behind, so you
   can scan it without knowing it. See [Finding your router](#finding-your-router).
+- **Save the scan** (see [Saved scans](#saved-scans)) to re-scan later and see
+  which ports appeared or disappeared.
 
 ### Subnet Scan
 - **Host discovery** (`nmap -sn`) across a CIDR range — ARP on the local segment,
@@ -161,12 +177,17 @@ Two different things, and the difference matters:
   The HTML is what you read; the JSON is what a later audit can be diffed
   against — findings not recorded on the day can't be reconstructed afterwards.
   Reports saved before this existed have no JSON and report `hasData: false`.
-- **Saved scans** (Subnet Scan, Subdomain Finder and URL Analyzer) — stores the
+- **Saved scans** (Network Scan, Subnet Scan, Subdomain Finder and URL Analyzer) — stores the
   tool's own result data, so reopening it re-renders through the normal UI with
   every button still working. **Refresh** re-runs the tool against the same
   target and marks what's **new** or **gone** since last time, and you can attach
   a **note** to any row. Notes are keyed to the scan, so they survive a host
   dropping out of a refresh and coming back.
+
+  Network Scan's rows are the **ports**, so a refresh tells you `22/tcp` is new
+  since last week — on your own LAN, that's the alert you actually want. It
+  remembers the options it ran with (port range, version/OS detection, scripts,
+  UDP) and replays them, so two runs are comparable.
 
   The URL Analyzer's rows are its **scorecard checks**, since one analysis is a
   report rather than a list of hosts. So a note lands on a check ("we accept the

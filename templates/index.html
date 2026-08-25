@@ -106,9 +106,20 @@
     <!-- ── Left menu ──────────────────────────────────────────────────── -->
     <nav class="sidebar" id="sidebar" aria-label="Functions">
       <div class="sidebar-section">Functions</div>
-      <button class="menu-item active" data-view="netscan">
-        <span class="menu-text"><strong>Network Scan</strong></span>
-      </button>
+      <div class="menu-row">
+        <button class="menu-item active" data-view="netscan">
+          <span class="menu-text"><strong>Network Scan</strong></span>
+        </button>
+        <button class="submenu-toggle" id="netscan-toggle" type="button" hidden
+                aria-expanded="true" aria-controls="netscan-submenu"
+                aria-label="Collapse saved scans" title="Collapse saved scans">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
+      <div class="submenu" id="netscan-submenu" role="group" aria-label="Saved host scans"></div>
       <!-- The chevron is a sibling of the menu button, not a child: a button
            can't nest inside a button, and the two do different things (switch
            view vs. collapse the saved list). -->
@@ -244,6 +255,8 @@
                   <span class="opt-body"><strong>Default scripts</strong></span></label>
                 <label class="opt"><input type="checkbox" name="skip_ping">
                   <span class="opt-body"><strong>Skip host discovery</strong></span></label>
+                <label class="opt"><input type="checkbox" name="udp">
+                  <span class="opt-body"><strong>UDP scan of 19 discovery ports</strong></span></label>
               </fieldset>
             </div>
           </div>
@@ -679,7 +692,29 @@
       <dt>Skip host discovery</dt>
       <dd>Treat the host as online even if it doesn't answer pings (<code>-Pn</code>).
         Useful for firewalled machines.</dd>
+      <dt>UDP scan of 19 discovery ports</dt>
+      <dd>Probes the ports that only speak UDP — SSDP, mDNS, SNMP, DHCP, NTP, NetBIOS,
+        CoAP, BACnet, IPMI. A device that exposes nothing over TCP often answers on one
+        of these. It runs as a second nmap pass, so if it's slow the TCP results still
+        come back; UDP silence is ambiguous by nature and is reported as
+        <em>open|filtered</em>.</dd>
     </dl>
+    <h4>Reading the result</h4>
+    <p>The <strong>MAC address</strong> and its <strong>vendor</strong> are the quickest
+      way to identify an unknown device — but nmap can only read them on its own network
+      segment, so if this container is on Docker's bridge network your LAN hosts won't
+      have one. An address marked <em>self-assigned</em> was chosen by the device rather
+      than assigned to a manufacturer, so it identifies nobody.</p>
+    <p>Ports that aren't listed individually are summarised beneath the table, and the
+      wording matters: <strong>closed</strong> means the host answered with a refusal —
+      it's reachable and listening on nothing — while <strong>filtered</strong> means
+      nothing came back at all, so something is dropping the probes.</p>
+    <h4>Saving a scan</h4>
+    <p><strong>Save scan</strong> keeps the result under this tool in the menu. Reopening
+      restores the report, the target and the options it ran with; <strong>Refresh</strong>
+      re-runs those same options and marks ports that are <strong>new</strong> or
+      <strong>gone</strong>. Each port takes a <strong>note</strong>, which survives every
+      refresh — so "8080 is deliberate" stays recorded.</p>
   </template>
 
   <template id="help-subnet" data-title="Subnet Scan">
@@ -1634,6 +1669,9 @@ body{height:auto;overflow:auto;padding:28px;}
       const stored = localStorage.getItem(KEY)
         ?? (legacyKey ? localStorage.getItem(legacyKey) : null);
       set(stored === '1');
+      // Migrated: drop the old key so it can't be read a second time, by which
+      // point another feature may legitimately own that name.
+      if (legacyKey) localStorage.removeItem(legacyKey);
     } catch (e) { set(false); }
     // Returned so a tool that fills its input from code can refresh the bar —
     // assigning .value never fires an 'input' event.
@@ -1735,6 +1773,7 @@ body{height:auto;overflow:auto;padding:28px;}
       os:        scanForm.os.checked,
       scripts:   scanForm.scripts.checked,
       skip_ping: scanForm.skip_ping.checked,
+      udp:       scanForm.udp.checked,
     };
     scanBtn.disabled = true;
     scanResults.innerHTML = '';
@@ -1748,7 +1787,7 @@ body{height:auto;overflow:auto;padding:28px;}
         body: JSON.stringify(opts) });
       const data = await res.json();
       if (!res.ok) { showScanError(data); return; }
-      renderScan(data);
+      netscanSaved.showLive(data);
     } catch (err) { showScanError({ error: 'Network error: ' + err.message }); }
     finally { scanBtn.disabled = false; }
   });
@@ -1759,34 +1798,131 @@ body{height:auto;overflow:auto;padding:28px;}
       (data.command ? `<div class="cmd">${esc(data.command)}</div>` : '');
   }
 
-  function renderScan(data) {
+  // What nmap summarised instead of listing. "998 closed (resets)" and "998
+  // filtered (no-response)" both look like "nothing found" in a table of open
+  // ports, but they say opposite things: a reset means the host is there and
+  // refusing, silence means something is dropping the probes.
+  const PORT_STATE_STORY = {
+    closed: p => `all ${p.count} scanned ${p.protocol.toUpperCase()} port(s) are <strong>closed</strong>`
+      + ` — the host answered every probe with a refusal, so it's reachable but listening on nothing`,
+    filtered: p => `all ${p.count} scanned ${p.protocol.toUpperCase()} port(s) are <strong>filtered</strong>`
+      + ` — nothing came back at all, so something is dropping the probes (a firewall, or the host`
+      + ` isn't reachable the way you think)`,
+    'open|filtered': p => `${p.count} ${p.protocol.toUpperCase()} port(s) gave no answer, which for UDP`
+      + ` means <strong>either</strong> open or filtered — silence doesn't distinguish them`,
+  };
+
+  function extraPortsLine(extra) {
+    const why = (e) => e.reasons && e.reasons.length
+      ? ` <span class="muted">(${e.reasons.map(r => esc(r.reason)).join(', ')})</span>` : '';
+    return extra.map(e => `${e.count} ${esc(e.protocol)} ${esc(e.state)}${why(e)}`).join(' · ');
+  }
+
+  function renderScan(data, ctx) {
     lastResults.netscan = data;
     scanStatus.hidden = true;
     const { dns, result, command, stderr } = data;
-    let html = `<div class="card result-section">
+    const notes = (ctx && ctx.notes) || {};
+    const newKeys = new Set((ctx && ctx.newKeys) || []);
+    let html = ctx ? netscanSaved.bar(ctx) : '';
+    // Reopening a saved scan restores the options it ran with, so a re-run by
+    // hand asks the same question. (The engine restores the target itself.)
+    if (ctx) {
+      const o = data.options || {};
+      const preset = scanForm.querySelector(`input[name="ports"][value="${o.ports || 'standard'}"]`);
+      if (preset) preset.checked = true;
+      for (const k of ['sV', 'os', 'scripts', 'skip_ping', 'udp'])
+        if (scanForm[k]) scanForm[k].checked = !!o[k];
+      netscanPanel.syncSummary();
+    }
+    html += `<div class="card result-section">
       <h3>Resolution</h3>
       <div class="info-grid">
         <div class="info-item"><strong>Input</strong><span class="mono">${esc(dns.input)}</span></div>
         <div class="info-item"><strong>IP address</strong><span class="mono">${esc(dns.ip) || '—'}</span></div>
         <div class="info-item"><strong>Hostname (PTR)</strong><span>${dns.hostname ? esc(dns.hostname) : '<span class="muted">no reverse DNS</span>'}</span></div>
-        ${dns.aliases && dns.aliases.length ? `<div class="info-item"><strong>Aliases</strong><span>${dns.aliases.map(esc).join(', ')}</span></div>` : ''}
-      </div></div>`;
+        ${dns.aliases && dns.aliases.length ? `<div class="info-item"><strong>Aliases</strong><span>${dns.aliases.map(esc).join(', ')}</span></div>` : ''}`;
+    // The hardware address is the single best identifier a LAN host has: the OUI
+    // names the manufacturer outright. It's only readable on the same segment,
+    // so when it's missing the result says why rather than leaving a blank.
+    if (result.mac) {
+      html += `<div class="info-item"><strong>MAC address</strong>
+        <span class="mono">${esc(result.mac)}${result.macSelfAssigned
+          ? ' <span class="host-badge moved">self-assigned</span>' : ''}</span></div>
+        <div class="info-item"><strong>Vendor (OUI)</strong><span>${result.vendor
+          ? esc(result.vendor)
+          : '<span class="muted">' + (result.macSelfAssigned
+              ? 'none — the address is self-assigned, not a manufacturer OUI'
+              : 'not in the OUI database') + '</span>'}</span></div>`;
+    }
+    html += `</div>`;
+    if (!result.mac && result.macHint)
+      html += `<p class="muted score-note">No MAC address — ${esc(result.macHint)}</p>`;
+    else if (result.macSelfAssigned)
+      html += `<p class="muted score-note">A self-assigned address is chosen by the device, not
+        burned in, so it identifies nobody: phones rotate one per network, and virtual interfaces
+        make theirs up.</p>`;
+    html += `</div>`;
 
     const stateClass = result.state === 'up' ? 'badge-up' : 'badge-down';
     html += `<div class="card result-section">
       <h3>Host <span class="badge ${stateClass}">${esc(result.state || 'unknown')}</span></h3>`;
-    const openish = result.ports.filter(p => p.state !== 'closed');
-    if (openish.length) {
+    // Ports that went away since the last refresh stay on screen, greyed out, so
+    // a service that was shut down (and its note) doesn't vanish silently.
+    const portKey = p => `${p.port}/${p.protocol}`;
+    const rows = result.ports.filter(p => p.state !== 'closed').map(p => ({ p, gone: false }))
+      .concat(((ctx && ctx.goneItems) || []).map(p => ({ p, gone: true })));
+    const extra = result.extraPorts || [];
+    if (rows.length) {
       html += `<table class="data-table"><thead><tr>
-        <th>Port</th><th>State</th><th>Service</th><th>Version / detail</th></tr></thead><tbody>`;
-      for (const p of openish) {
+        <th>Port</th><th>State</th><th>Service</th><th>Version / detail</th>`
+        + (ctx ? `<th>Note</th>` : '') + `</tr></thead><tbody>`;
+      for (const { p, gone } of rows) {
         const sc = p.state === 'open' ? 'st-open' : p.state === 'filtered' ? 'st-filtered' : 'st-other';
-        html += `<tr><td class="mono">${p.port}/${esc(p.protocol)}</td>
-          <td><span class="state ${sc}">${esc(p.state)}</span></td>
+        const key = portKey(p);
+        const badge = gone ? `<span class="host-badge gone">gone</span>`
+          : newKeys.has(key) ? `<span class="host-badge new">new</span>` : '';
+        const note = notes[key];
+        html += `<tr${gone ? ' class="row-gone"' : ''}>
+          <td class="mono">${p.port}/${esc(p.protocol)}${badge}`
+          + (ctx ? `<span class="row-actions">${netscanSaved.noteBtn(key, !!note)}</span>` : '')
+          + `</td>
+          <td><span class="state ${sc}">${esc(p.state)}</span>
+            ${p.reason ? `<span class="muted small"> ${esc(p.reason)}</span>` : ''}</td>
           <td>${esc(p.service) || '<span class="muted">—</span>'}</td>
-          <td>${esc(p.detail) || '<span class="muted">—</span>'}</td></tr>`;
+          <td>${esc(p.detail) || '<span class="muted">—</span>'}</td>`
+          + (ctx ? `<td class="note-cell"${note ? ` title="${esc(note.note)}"` : ''}>`
+              + `${note ? esc(note.note) : '<span class="muted">—</span>'}</td>` : '')
+          + `</tr>`;
       }
       html += `</tbody></table>`;
+      if (extra.length)
+        html += `<p class="muted score-note">Not shown: ${extraPortsLine(extra)}.</p>`;
+    } else if (extra.length) {
+      // Nothing to tabulate, but "no open ports" is the least useful thing that
+      // could be said here — the summary states nmap owes you.
+      html += `<div class="issue-list">`;
+      for (const e of extra) {
+        const story = PORT_STATE_STORY[e.state];
+        html += `<div class="issue-row ${e.state === 'closed' ? 'issue-ok' : 'issue-low'}">`
+          + (story ? story(e) : `${e.count} ${esc(e.protocol)} port(s) ${esc(e.state)}`)
+          + (e.reasons && e.reasons.length
+              ? ` <span class="muted">(${e.reasons.map(r => esc(r.reason)).join(', ')})</span>` : '')
+          + `</div>`;
+      }
+      html += `</div>`;
+    } else if (!result.state) {
+      // nmap emitted no host at all: it decided the address was down, so no port
+      // was ever probed. Reporting that as "no open ports" invents a result.
+      const already = (data.options || {}).skip_ping;
+      html += `<div class="issue-list"><div class="issue-row issue-low">
+        nmap got no answer from this address and <strong>scanned no ports</strong> —
+        ${already
+          ? `host discovery was already skipped, so the address didn't answer at the link
+             layer either. Nothing is at it on this segment.`
+          : `it never replied to discovery. Try <strong>Skip host discovery</strong> if you
+             know it's up but it ignores pings.`}
+      </div></div>`;
     } else {
       html += `<p class="muted">No open ports found in the scanned range.</p>`;
     }
@@ -1798,8 +1934,9 @@ body{height:auto;overflow:auto;padding:28px;}
     html += `</div>`;
     html += `<details class="card raw"><summary>nmap command${stderr ? ' &amp; notes' : ''}</summary>
       <div class="cmd">${esc(command)}</div>
+      ${data.udpCommand ? `<div class="cmd">${esc(data.udpCommand)}</div>` : ''}
       ${stderr ? `<pre class="stderr">${esc(stderr)}</pre>` : ''}</details>`;
-    scanResults.innerHTML = reportBar('netscan') + html;
+    scanResults.innerHTML = reportBar('netscan', ctx ? '' : netscanSaved.saveBtn()) + html;
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -1928,7 +2065,10 @@ body{height:auto;overflow:auto;padding:28px;}
     const toggle = document.getElementById(cfg.toggleId);
     const resultsEl = document.getElementById(cfg.resultsId);
     const statusEl = document.getElementById(cfg.statusId);
-    const COLLAPSE_KEY = `secanalysis-${cfg.tool}-collapsed`;
+    // `-saved-` distinguishes this from a tool's input-panel collapse state,
+    // which makeCollapsibleCard stores under `secanalysis-<tool>-panel-collapsed`.
+    // Network Scan has both, and before the suffixes they were the same key.
+    const COLLAPSE_KEY = `secanalysis-${cfg.tool}-saved-collapsed`;
     let scans = [];   // this tool's saved scans, for the sidebar
     let open = null;  // the saved scan on screen, or null when showing a live run
     let last = null;  // last live result, so "Save scan" needs no re-run
@@ -2172,7 +2312,22 @@ body{height:auto;overflow:auto;padding:28px;}
     refreshMsg: t => `Re-analyzing <code>${esc(t)}</code>…`,
   });
 
-  const savedMods = [subnetSaved, subdomainsSaved, urlSaved];
+  const netscanSaved = makeSavedScans({
+    tool: 'netscan', view: 'netscan', unit: 'ports',
+    submenuId: 'netscan-submenu', toggleId: 'netscan-toggle',
+    resultsId: 'scan-results', statusId: 'scan-status',
+    targetInputId: 'target',
+    render: (data, ctx) => renderScan(data, ctx),
+    describe: d => {
+      const open = (d.result.ports || []).filter(p => p.state === 'open').length;
+      const vendor = d.result.vendor ? `, ${d.result.vendor}` : '';
+      return `${open} open port(s) on ${d.dns.input}${vendor}. A refresh re-runs the same `
+        + `options and marks ports that appeared or disappeared.`;
+    },
+    refreshMsg: t => `Re-scanning <code>${esc(t)}</code>… a wide port range can take a while.`,
+  });
+
+  const savedMods = [netscanSaved, subnetSaved, subdomainsSaved, urlSaved];
   function refreshSavedMenus() { savedMods.forEach(m => m.renderMenu()); }
   function closeSavedScans() { savedMods.forEach(m => m.clearOpen()); }
 
