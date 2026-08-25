@@ -676,7 +676,8 @@
     <dl class="help-list">
       <dt>Fast</dt><dd>~100 most common ports. Quickest, but can miss things.</dd>
       <dt>Standard</dt><dd>nmap's top 1000 ports. Good default.</dd>
-      <dt>Full</dt><dd>All 65,535 ports. Thorough, but slow.</dd>
+      <dt>Full</dt><dd>All 65,535 ports. Thorough, but slow — it's given four times the
+        ordinary time budget, so it has a chance of finishing.</dd>
     </dl>
     <h4>Extra checks</h4>
     <dl class="help-list">
@@ -709,6 +710,14 @@
       wording matters: <strong>closed</strong> means the host answered with a refusal —
       it's reachable and listening on nothing — while <strong>filtered</strong> means
       nothing came back at all, so something is dropping the probes.</p>
+    <h4>If a scan runs out of time</h4>
+    <p>The time budget scales with the port range, and at the deadline nmap is asked to
+      stop rather than killed — so the result says what it had established and is marked
+      <strong>incomplete</strong>, instead of failing with nothing. There's a limit to
+      what survives: nmap publishes a host's ports only once it has finished that host,
+      so an interrupted scan has no port list at all. A saved scan whose refresh times
+      out is left untouched, because a partial result would report everything the scan
+      never reached as gone.</p>
     <h4>Saving a scan</h4>
     <p><strong>Save scan</strong> keeps the result under this tool in the menu. Reopening
       restores the report, the target and the options it ran with; <strong>Refresh</strong>
@@ -1835,6 +1844,12 @@ body{height:auto;overflow:auto;padding:28px;}
         if (scanForm[k]) scanForm[k].checked = !!o[k];
       netscanPanel.syncSummary();
     }
+    if (data.timedOut)
+      html += `<div class="card result-section"><div class="warning-banner">
+        ⚠️ Stopped at its ${data.timeoutSeconds}s limit — these results are incomplete.
+        nmap doesn't publish a host's ports until it has finished that host, so an
+        interrupted scan reports what it had established and no port list. Narrow the
+        port range, or raise <code>SCAN_TIMEOUT</code>.</div></div>`;
     html += `<div class="card result-section">
       <h3>Resolution</h3>
       <div class="info-grid">
@@ -1911,6 +1926,11 @@ body{height:auto;overflow:auto;padding:28px;}
           + `</div>`;
       }
       html += `</div>`;
+    } else if (data.timedOut) {
+      html += `<div class="issue-list"><div class="issue-row issue-med">
+        The scan was stopped before it finished this host, so <strong>no port list was
+        produced</strong> — not because nothing is listening. Anything above is what nmap
+        had established by the deadline.</div></div>`;
     } else if (!result.state) {
       // nmap emitted no host at all: it decided the address was down, so no port
       // was ever probed. Reporting that as "no open ports" invents a result.
@@ -1991,6 +2011,14 @@ body{height:auto;overflow:auto;padding:28px;}
       .concat(((ctx && ctx.goneItems) || []).map(h => ({ h, gone: true })));
 
     let html = ctx ? subnetSaved.bar(ctx) : '';
+    // Unlike a single-host scan, a sweep publishes each host as it finishes with
+    // it, so an interrupted one really does return partial findings — worth
+    // showing, as long as it's clear the rest of the range went unvisited.
+    if (data.timedOut)
+      html += `<div class="card result-section"><div class="warning-banner">
+        ⚠️ Stopped at its ${data.timeoutSeconds}s limit — the hosts below are the ones the
+        sweep reached, not the whole range. Anything not listed was never visited rather
+        than found to be offline.</div></div>`;
     html += `<div class="card result-section">
       <h3>Live hosts <span class="port-range">${hosts.length} up in ${esc(subnet)}</span></h3>`;
     if (rows.length) {

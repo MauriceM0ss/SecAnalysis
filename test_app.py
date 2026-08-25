@@ -204,14 +204,11 @@ def test_udp_pass_summarises_the_ports_that_said_nothing(monkeypatch):
     <port protocol="udp" portid="69"><state state="closed" reason="port-unreach"/></port>
     </ports></host></nmaprun>"""
 
-    class _Proc:
-        stdout, stderr, returncode = udp_xml, "", 0
-
-    monkeypatch.setattr(appmod.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(appmod, "run_nmap", lambda args, timeout: (udp_xml, "", False))
     result = {"ports": [], "extraPorts": [], "mac": None}
-    command, err = appmod._udp_pass("10.0.0.5", {}, result)
+    command, err, timed_out = appmod._udp_pass("10.0.0.5", {}, result)
 
-    assert "-sU" in command and not err
+    assert "-sU" in command and not err and not timed_out
     # Only the port that actually answered is listed; the silent ones are counted.
     assert [p["port"] for p in result["ports"]] == [161]
     assert {(e["state"], e["count"]) for e in result["extraPorts"]} == {
@@ -219,13 +216,14 @@ def test_udp_pass_summarises_the_ports_that_said_nothing(monkeypatch):
 
 
 def test_udp_pass_failure_leaves_the_tcp_results_alone(monkeypatch):
-    def boom(*a, **k):
-        raise appmod.subprocess.TimeoutExpired("nmap", 300)
-
-    monkeypatch.setattr(appmod.subprocess, "run", boom)
+    # The UDP pass ran out of time and produced nothing. The TCP findings it was
+    # bolted onto are still a good answer, so they survive and the run is flagged
+    # incomplete rather than failed.
+    monkeypatch.setattr(appmod, "run_nmap", lambda args, timeout: ("", "", True))
     result = {"ports": [{"port": 22}], "extraPorts": [], "mac": None}
-    command, err = appmod._udp_pass("10.0.0.5", {}, result)
-    assert "timed out" in err and result["ports"] == [{"port": 22}]
+    command, err, timed_out = appmod._udp_pass("10.0.0.5", {}, result)
+    assert timed_out and "timed out" in err
+    assert result["ports"] == [{"port": 22}]
 
 
 def _netscan_payload(ports=((22, "tcp"), (80, "tcp")), **opts):
@@ -289,6 +287,90 @@ def test_note_on_a_port_survives_a_refresh(client, monkeypatch):
     client.post("/api/saved-scans/%d/refresh" % sid)
     notes = client.get("/api/saved-scans/%d" % sid).get_json()["notes"]
     assert notes["22/tcp"]["note"] == "ssh, deliberate"
+
+
+# ── Timeouts: budget by workload, and salvage what the run did produce ─────
+# nmap's XML from an interrupted run is cut off mid-document — no closing tag,
+# and for a single host no <port> elements at all, because nmap only publishes a
+# host once it has finished with it. A sweep is the opposite: each host is
+# flushed as it completes, so an interrupted one really does carry findings.
+NMAP_XML_TRUNCATED = """<?xml version="1.0"?><nmaprun>
+<scaninfo type="syn" protocol="tcp" numservices="65535" services="1-65535"/>
+<hosthint><status state="up" reason="arp-response"/>
+<address addr="192.168.2.134" addrtype="ipv4"/>
+<address addr="48:A2:E6:BF:4A:D4" addrtype="mac" vendor="Resideo"/>
+</hosthint>"""
+
+NMAP_SWEEP_TRUNCATED = """<?xml version="1.0"?><nmaprun>
+<host><status state="up" reason="arp-response"/>
+<address addr="10.0.0.1" addrtype="ipv4"/>
+<address addr="AA:BB:CC:00:11:22" addrtype="mac" vendor="Acme"/></host>
+<host><status state="up" reason="arp-response"/>
+<address addr="10.0.0.2" addrtype="ipv4"/></host>
+<host><status state="up" """
+
+
+def test_scan_budget_scales_with_the_work_requested():
+    base = appmod.SCAN_TIMEOUT
+    assert appmod.scan_budget({"ports": "fast"}) == base
+    assert appmod.scan_budget({"ports": "standard"}) == base
+    # A full 65,535-port sweep is a different order of work; giving it the same
+    # allowance made the most expensive option the likeliest to return nothing.
+    assert appmod.scan_budget({"ports": "full"}) == base * 4
+    assert appmod.scan_budget({"ports": "full", "sV": True}) == int(base * 4 * 1.5)
+    assert appmod.scan_budget({"ports": "standard", "scripts": True}) == int(base * 1.5)
+
+
+def test_parse_nmap_xml_salvages_an_interrupted_single_host_scan():
+    r = appmod.parse_nmap_xml(NMAP_XML_TRUNCATED)
+    # No ports — nmap never got to publish them — but the identity survives, which
+    # is the difference between "we learned nothing" and "we learned what it is".
+    assert r["ports"] == []
+    assert r["state"] == "up"
+    assert r["mac"] == "48:A2:E6:BF:4A:D4" and r["vendor"] == "Resideo"
+
+
+def test_parse_nmap_hosts_xml_salvages_the_hosts_a_sweep_finished():
+    hosts = appmod.parse_nmap_hosts_xml(NMAP_SWEEP_TRUNCATED)
+    # The two complete <host> blocks survive; the third, cut off mid-tag, doesn't.
+    assert [h["ip"] for h in hosts] == ["10.0.0.1", "10.0.0.2"]
+    assert hosts[0]["vendor"] == "Acme"
+
+
+def test_nmap_root_gives_up_on_unparseable_output():
+    assert appmod._nmap_root("this is not xml at all") is None
+
+
+def test_run_nmap_reports_a_timeout_and_still_returns_output():
+    # `sleep` writes nothing and dies on the signal, which is the shape we need:
+    # a process that outlives its deadline and is asked to stop.
+    out, err, timed_out = appmod.run_nmap(["sleep", "30"], 1)
+    assert timed_out and out == ""
+    out, err, timed_out = appmod.run_nmap(["echo", "done"], 30)
+    assert not timed_out and out.strip() == "done"
+
+
+def test_refresh_refuses_to_store_a_partial_rescan(client, monkeypatch):
+    """A timed-out re-scan must not become the new baseline: everything it never
+    reached would be reported as gone."""
+    monkeypatch.setattr(appmod, "run_netscan",
+                        lambda t, o: (_netscan_payload(), None, 200))
+    sid = client.post("/api/saved-scans", json={
+        "tool": "netscan", "name": "Gateway", "data": _netscan_payload()}).get_json()["id"]
+    client.put("/api/saved-scans/%d/notes/22/tcp" % sid, json={"note": "keep me"})
+
+    partial = _netscan_payload(ports=((22, "tcp"),))
+    partial["timedOut"] = True
+    monkeypatch.setattr(appmod, "run_netscan", lambda t, o: (partial, None, 200))
+
+    r = client.post("/api/saved-scans/%d/refresh" % sid)
+    assert r.status_code == 504 and "left unchanged" in r.get_json()["error"]
+
+    # The stored scan still has both ports and its note — nothing was overwritten.
+    saved = client.get("/api/saved-scans/%d" % sid).get_json()
+    assert [p["port"] for p in saved["data"]["result"]["ports"]] == [22, 80]
+    assert saved["notes"]["22/tcp"]["note"] == "keep me"
+    assert saved["lastRefreshed"] is None
 
 
 # ── WHOIS ──────────────────────────────────────────────────────────────────

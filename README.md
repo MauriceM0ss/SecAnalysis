@@ -58,6 +58,15 @@ things in the top bar.
   can scan it without knowing it. See [Finding your router](#finding-your-router).
 - **Save the scan** (see [Saved scans](#saved-scans)) to re-scan later and see
   which ports appeared or disappeared.
+- **A time budget that fits the work** — `SCAN_TIMEOUT` covers an ordinary scan;
+  a Full (65,535-port) run gets four times that, and version detection or scripts
+  half again, so the most expensive option is no longer the one most likely to
+  return nothing. At the deadline nmap is asked to stop rather than killed, and
+  whatever it had established (host state, MAC) is reported with the result
+  flagged **incomplete**. Note that no port list survives an interrupted
+  single-host scan: nmap publishes a host's ports only once it has finished that
+  host. A *sweep* is different — it flushes each host as it goes, so an
+  interrupted Subnet Scan returns the hosts it reached, marked as partial.
 
 ### Subnet Scan
 - **Host discovery** (`nmap -sn`) across a CIDR range — ARP on the local segment,
@@ -184,6 +193,10 @@ Two different things, and the difference matters:
   a **note** to any row. Notes are keyed to the scan, so they survive a host
   dropping out of a refresh and coming back.
 
+  A refresh that runs out of time is **discarded**: the saved scan is left exactly
+  as it was, because storing a partial result would report everything the scan
+  never reached as "gone".
+
   Network Scan's rows are the **ports**, so a refresh tells you `22/tcp` is new
   since last week — on your own LAN, that's the alert you actually want. It
   remembers the options it ran with (port range, version/OS detection, scripts,
@@ -284,7 +297,7 @@ outside scanner would need, but the scan itself has to come from outside.)
 
 | Variable       | Default                  | Meaning                                              |
 |----------------|--------------------------|------------------------------------------------------|
-| `SCAN_TIMEOUT` | `300`                    | Max seconds before a scan aborts                     |
+| `SCAN_TIMEOUT` | `300`                    | Seconds for an ordinary scan; a Full range gets 4×   |
 | `GITHUB_TOKEN` | _(unset)_                | Fine-grained PAT for auditing private GitHub repos by URL |
 | `AUDIT_DIR`    | `./audit`                | Host folder of local clones, mounted at `/audit`     |
 | `AUDIT_ROOT`   | `/audit`                 | In-container path Repo Audit reads local clones from |
@@ -349,9 +362,11 @@ at a temp dir and never touch the network or the real data volume.
 
 ## Notes & limits
 
-- Scans run synchronously, so the browser waits while nmap works. Full (`-p-`)
-  scans on a slow host can hit the timeout — bump `SCAN_TIMEOUT` or use a
-  smaller range.
+- Scans run synchronously, so the browser waits while nmap works. The time
+  budget scales with the port range (a Full scan gets 4× `SCAN_TIMEOUT`, and
+  half again with `-sV`/`-sC`), but a slow host can still hit it — bump
+  `SCAN_TIMEOUT` or use a smaller range. A scan that runs out of time reports
+  what it had, marked incomplete, rather than failing outright.
 - Passive subdomain sources are third-party and rate-limited; results vary with
   what the CT logs have seen.
 - The DKIM check probes a list of common selectors, so "no common selectors"

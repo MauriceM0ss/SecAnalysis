@@ -11,6 +11,7 @@ import http.client
 import ipaddress
 import json
 import threading
+import signal
 import subprocess
 import tempfile
 import urllib.request
@@ -57,6 +58,14 @@ PORT_PRESETS = {
     "full":     ["-p-"],          # all 65535 ports (slow)
 }
 
+# One scan's time budget, as a multiple of SCAN_TIMEOUT. That setting is sized for
+# an ordinary scan; a full 65,535-port sweep is a different order of work, and
+# giving it the same allowance made the most expensive option the one most likely
+# to return nothing at all.
+PORT_PRESET_BUDGET = {"fast": 1, "standard": 1, "full": 4}
+# How long nmap gets to finish writing its output after we ask it to stop.
+NMAP_WINDUP = 20
+
 # Subnet Scan caps the sweep so a fat prefix can't turn into a 65k-host scan.
 # 1024 addresses ≈ a /22 (or /118 for IPv6); anything larger is rejected.
 MAX_SUBNET_HOSTS = 1024
@@ -101,6 +110,39 @@ def resolve(target: str) -> dict:
 # because a closed port answers with an ICMP unreachable that hosts rate-limit.
 UDP_SCAN_PORTS = ("53,67,68,69,123,137,138,161,162,500,514,520,623,"
                   "1900,4500,5353,5683,47808,49152")
+
+
+def scan_budget(opts: dict) -> int:
+    """Seconds to allow for one scan, scaled to the work being asked for."""
+    budget = SCAN_TIMEOUT * PORT_PRESET_BUDGET.get(opts.get("ports", "standard"), 1)
+    # Version detection and NSE scripts each add a round of probing per open port.
+    if opts.get("sV") or opts.get("scripts"):
+        budget = int(budget * 1.5)
+    return budget
+
+
+def run_nmap(args: list, timeout: int):
+    """Run nmap, and at the deadline ask it to stop rather than killing it.
+
+    Returns (stdout, stderr, timed_out). SIGINT lets nmap wind up and close its
+    XML, which for a sweep means every host it had already finished comes back
+    instead of being thrown away. It does *not* rescue a single host's ports:
+    nmap writes a host's block only once that host is done, so an interrupted
+    port scan reports the host and its MAC (from <hosthint>) and no ports. That's
+    an nmap property, not something this can work around — hence the scaled
+    budget above, so the deadline is hit far less often."""
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return out, err, False
+    except subprocess.TimeoutExpired:
+        proc.send_signal(signal.SIGINT)
+        try:
+            out, err = proc.communicate(timeout=NMAP_WINDUP)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            out, err = proc.communicate()
+        return out, err, True
 
 
 def build_nmap_args(target: str, opts: dict) -> list:
@@ -167,6 +209,30 @@ def _mac_hint(ip, mac) -> str:
             "docker-compose.yml.")
 
 
+def _nmap_root(xml_text: str):
+    """nmap's XML, tolerating the truncation an interrupted run leaves behind.
+
+    A killed nmap never closes the document, which ET.fromstring rejects outright
+    — losing even the parts that did parse. The pull parser keeps every element
+    that completed, which is how an interrupted scan can still report the host
+    state and hardware address it had already established."""
+    try:
+        return ET.fromstring(xml_text)
+    except ET.ParseError:
+        pass
+    parser = ET.XMLPullParser(("end",))
+    try:
+        parser.feed(xml_text)
+        events = list(parser.read_events())
+    except ET.ParseError:
+        return None
+    root = ET.Element("nmaprun")
+    for _, el in events:
+        if el.tag in ("host", "hosthint", "runstats"):
+            root.append(el)
+    return root
+
+
 def parse_nmap_xml(xml_text: str, protocol: str = "tcp") -> dict:
     """Pull the interesting bits out of nmap's XML into plain dicts.
 
@@ -176,8 +242,15 @@ def parse_nmap_xml(xml_text: str, protocol: str = "tcp") -> dict:
     out = {"state": None, "ports": [], "os": [], "hostnames": [],
            "mac": None, "vendor": None, "macSelfAssigned": False,
            "macHint": "", "extraPorts": []}
-    root = ET.fromstring(xml_text)
+    root = _nmap_root(xml_text)
+    if root is None:
+        return out
     host = root.find("host")
+    if host is None:
+        # An interrupted port scan has no finished host, but nmap has usually
+        # already published what it knows about the target: that it's up, and its
+        # hardware address. Better than reporting nothing at all.
+        host = root.find("hosthint")
     if host is None:
         return out
 
@@ -255,9 +328,15 @@ def validate_subnet(cidr: str):
 
 def parse_nmap_hosts_xml(xml_text: str) -> list:
     """Parse an `nmap -sn` host-discovery run into a list of live hosts. Unlike
-    parse_nmap_xml (single host, ports), this walks every <host> that came back up."""
+    parse_nmap_xml (single host, ports), this walks every <host> that came back up.
+
+    Uses the tolerant reader because a sweep is the case where an interrupted run
+    is worth salvaging: nmap flushes each host as it finishes with it, so a scan
+    stopped at the deadline still yields every host it had got to."""
     hosts = []
-    root = ET.fromstring(xml_text)
+    root = _nmap_root(xml_text)
+    if root is None:
+        return hosts
     for host in root.findall("host"):
         status = host.find("status")
         if status is None or status.get("state") != "up":
@@ -2413,22 +2492,21 @@ NETSCAN_OPTIONS = ("sV", "os", "scripts", "skip_ping", "udp")
 def _udp_pass(target: str, opts: dict, result: dict):
     """Run the UDP scan and fold it into an existing TCP result.
 
-    Returns (command, extra_stderr). A UDP failure is reported as a note beside
-    the TCP findings rather than as an error: the TCP half of the scan is still
-    a perfectly good answer, and losing it to a slow UDP pass would be worse."""
+    Returns (command, extra_stderr, timed_out). A UDP failure is reported as a
+    note beside the TCP findings rather than as an error: the TCP half of the scan
+    is still a perfectly good answer, and losing it to a slow UDP pass would be
+    worse."""
     args = build_udp_args(target, opts)
     command = " ".join(args)
+    out, err, timed_out = run_nmap(args, SCAN_TIMEOUT)
+    if not out.strip():
+        note = ("UDP scan timed out after %ss — the TCP results are unaffected." % SCAN_TIMEOUT
+                if timed_out else (err.strip() or "UDP scan returned no output."))
+        return command, note, timed_out
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return command, ("UDP scan timed out after %ss — TCP results below are unaffected."
-                         % SCAN_TIMEOUT)
-    if not proc.stdout.strip():
-        return command, (proc.stderr.strip() or "UDP scan returned no output.")
-    try:
-        udp = parse_nmap_xml(proc.stdout, protocol="udp")
+        udp = parse_nmap_xml(out, protocol="udp")
     except ET.ParseError:
-        return command, "Could not parse the UDP scan's output."
+        return command, "Could not parse the UDP scan's output.", timed_out
 
     # nmap lists every port named in -p, so a silent host yields nineteen rows of
     # "open|filtered / no-response" that would bury the TCP findings. Keep the
@@ -2447,7 +2525,11 @@ def _udp_pass(target: str, opts: dict, result: dict):
     if not result["mac"] and udp["mac"]:
         for key in ("mac", "vendor", "macSelfAssigned", "macHint"):
             result[key] = udp[key]
-    return command, proc.stderr.strip()
+    note = err.strip()
+    if timed_out:
+        note = "\n".join(t for t in (note, "UDP scan hit its %ss deadline, so its port list "
+                                            "is incomplete." % SCAN_TIMEOUT) if t)
+    return command, note, timed_out
 
 
 def run_netscan(target: str, opts: dict):
@@ -2465,30 +2547,32 @@ def run_netscan(target: str, opts: dict):
 
     dns_info = resolve(target)
     args = build_nmap_args(target, opts)
+    budget = scan_budget(opts)
+    out, err, timed_out = run_nmap(args, budget)
 
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None, {"error": f"Scan timed out after {SCAN_TIMEOUT}s. Try a smaller port range.",
-                      "command": " ".join(args)}, 504
-
-    if not proc.stdout.strip():
-        return None, {"error": (proc.stderr.strip() or "nmap returned no output."),
+    if not out.strip():
+        if timed_out:
+            return None, {"error": f"Scan timed out after {budget}s with nothing to show for it. "
+                                   f"Try a smaller port range, or raise SCAN_TIMEOUT.",
+                          "command": " ".join(args)}, 504
+        return None, {"error": (err.strip() or "nmap returned no output."),
                       "command": " ".join(args)}, 500
 
     try:
-        result = parse_nmap_xml(proc.stdout)
+        result = parse_nmap_xml(out)
     except ET.ParseError:
         return None, {"error": "Could not parse nmap output.",
-                      "command": " ".join(args), "raw": proc.stdout[:4000]}, 500
+                      "command": " ".join(args), "raw": out[:4000]}, 500
 
-    stderr, udp_command = proc.stderr.strip(), None
+    stderr, udp_command = err.strip(), None
     if opts["udp"]:
-        udp_command, udp_stderr = _udp_pass(target, opts, result)
+        udp_command, udp_stderr, udp_timed_out = _udp_pass(target, opts, result)
         stderr = "\n".join(t for t in (stderr, udp_stderr) if t)
+        timed_out = timed_out or udp_timed_out
 
     return {"dns": dns_info, "result": result, "options": opts,
             "command": " ".join(args), "udpCommand": udp_command,
+            "timedOut": timed_out, "timeoutSeconds": budget,
             "stderr": stderr}, None, 200
 
 
@@ -2526,24 +2610,25 @@ def run_subnet_sweep(cidr: str):
     # no port scan. This is the fast "which machines are alive?" sweep.
     args = ["nmap", "-sn", "-oX", "-", "--reason", "-T4", str(net)]
 
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=SCAN_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None, {"error": f"Subnet scan timed out after {SCAN_TIMEOUT}s. Try a smaller subnet.",
-                      "command": " ".join(args)}, 504
+    out, err, timed_out = run_nmap(args, SCAN_TIMEOUT)
 
-    if not proc.stdout.strip():
-        return None, {"error": (proc.stderr.strip() or "nmap returned no output."),
+    if not out.strip():
+        if timed_out:
+            return None, {"error": f"Subnet scan timed out after {SCAN_TIMEOUT}s before reaching "
+                                   f"any host. Try a smaller subnet.",
+                          "command": " ".join(args)}, 504
+        return None, {"error": (err.strip() or "nmap returned no output."),
                       "command": " ".join(args)}, 500
 
     try:
-        hosts = parse_nmap_hosts_xml(proc.stdout)
+        hosts = parse_nmap_hosts_xml(out)
     except ET.ParseError:
         return None, {"error": "Could not parse nmap output.",
-                      "command": " ".join(args), "raw": proc.stdout[:4000]}, 500
+                      "command": " ".join(args), "raw": out[:4000]}, 500
 
     return {"subnet": str(net), "hosts": hosts, "count": len(hosts),
-            "command": " ".join(args), "stderr": proc.stderr.strip()}, None, 200
+            "timedOut": timed_out, "timeoutSeconds": SCAN_TIMEOUT,
+            "command": " ".join(args), "stderr": err.strip()}, None, 200
 
 
 @app.route("/api/subnet", methods=["POST"])
@@ -3459,6 +3544,10 @@ def _clean_netscan_result(data, target, prev=None):
         "command": str(data.get("command") or ""),
         "udpCommand": str(data.get("udpCommand") or "") or None,
         "stderr": str(data.get("stderr") or ""),
+        # Kept so a scan saved from a partial run still says it was partial. A
+        # refresh can never store one — see the guard in refresh_saved_scan.
+        "timedOut": bool(data.get("timedOut")),
+        "timeoutSeconds": int(data.get("timeoutSeconds") or 0) or None,
     }
 
 
@@ -3741,6 +3830,13 @@ def refresh_saved_scan(sid):
     payload, err, status = spec["sweep"](target, old_data)
     if err:
         return jsonify(err), status
+    # A scan that ran out of time saw only part of the target. Storing it would
+    # report everything it never reached as "gone", which is a worse answer than
+    # not refreshing at all — so the saved scan is left exactly as it was.
+    if payload.get("timedOut"):
+        return jsonify({"error": "The re-scan hit its time limit before finishing, so the saved "
+                                 "scan was left unchanged — a partial result would report "
+                                 "ports and hosts as gone when they were only never reached."}), 504
 
     clean = spec["clean"](payload, target, old_data)
     new_keys, gone_items = _diff_items(old_items, spec["items"](clean), spec["key"])
