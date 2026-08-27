@@ -243,10 +243,14 @@ code {
 }
 
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
+/* The bar carries the same surface as the left menu rather than its own black,
+   so the window reads as one themed panel instead of a black strip on top of a
+   coloured app. Its type therefore uses the ordinary palette: the --header-*
+   colours were picked to sit on black and would be unreadable here in Light. */
 .site-header {
   position: sticky; top: 0; z-index: 20;
   height: var(--header-h);
-  background: var(--header-bg);
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--pane-rule);
   box-shadow: 0 0 40px rgba(var(--accent-rgb), .08);
   padding: 0 22px;
@@ -256,14 +260,20 @@ code {
 }
 /* Hamburger + wordmark share the header's first grid column. */
 .header-left { display: flex; align-items: center; gap: 10px; }
-.logo { display: flex; align-items: center; gap: 9px; font-family: var(--font-head); font-weight: 700; font-size: 1.05rem;
-  color: var(--header-logo); text-shadow: var(--glow-logo); }
+.logo {
+  display: flex; align-items: center; gap: 9px;
+  font-family: var(--font-head); font-weight: 700; font-size: 1rem;
+  color: var(--text); letter-spacing: -.01em;
+}
+.logo::before {
+  content: ">_"; font-weight: 700; color: var(--header-logo);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 /* The glyph is inline SVG filled with `currentColor`, so it inherits the colour
    the wordmark above sets and follows the theme. `flex: none` stops it being
    squeezed when the header is narrow. */
-.logo-icon { width: 26px; height: 26px; flex: none; }
-.header-title { justify-self: center; font-size: .72rem; font-weight: 600; letter-spacing: .22em;
-  text-transform: uppercase; color: var(--header-fg); }
+.header-title { justify-self: center; font-size: .68rem; font-weight: 600; letter-spacing: .24em;
+  text-transform: uppercase; color: var(--text-muted); }
 
 /* Top-right action cluster (reset + settings). */
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 6px; }
